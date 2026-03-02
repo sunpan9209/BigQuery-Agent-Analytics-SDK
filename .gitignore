@@ -11,3 +11,11 @@ build/
 .venv/
 venv/
 env/
+
+# Local workspace metadata
+.code*/
+
+# macOS Finder metadata
+.DS_Store
+.DS_Store?
+._*
