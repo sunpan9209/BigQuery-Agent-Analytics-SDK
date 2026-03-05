@@ -1207,6 +1207,46 @@ print(vm.get_view_sql("TOOL_COMPLETED"))
 
 ---
 
+## 17. OPA Policy Evaluation (POC)
+
+`OPAPolicyEvaluator` adds policy-focused evaluation to `Client.evaluate(...)`.
+Primary mode calls a BigQuery Remote Function backed by a Cloud Run OPA service.
+An experimental `python_udf_preview` mode is also available behind an explicit
+flag.
+
+```python
+from bigquery_agent_analytics import Client, OPAPolicyEvaluator
+
+client = Client(
+    project_id="rag-chatbot-485501",
+    dataset_id="agent_trace",
+    table_id="agent_events",
+    location="US",
+    verify_schema=False,
+)
+
+evaluator = OPAPolicyEvaluator(
+    policy_id="pii_egress_v1",
+    policy_version="v1",
+    mode="remote_function",
+    remote_function_fqn="rag-chatbot-485501.agent_trace.opa_policy_eval",
+    persist_table="policy_decisions_poc",
+    return_decisions=True,
+    lookback_hours=24,
+    max_events=2000,
+    max_bytes_billed_gb=50,
+)
+
+report = client.evaluate(evaluator=evaluator)
+print(report.summary())
+print(report.details.get("persisted_table"))
+```
+
+Policy-specific fields are exposed in `report.details`, including
+`source_table`, `fallback_used`, and optional `policy_decisions`.
+
+---
+
 ## Module Architecture
 
 ```
@@ -1215,7 +1255,8 @@ bigquery_agent_analytics/
 │   Core
 │   ├── client.py              ← High-level SDK entry point
 │   ├── trace.py               ← Trace/Span reconstruction & DAG rendering
-│   └── evaluators.py          ← CodeEvaluator + LLMAsJudge + SQL templates
+│   ├── evaluators.py          ← CodeEvaluator + LLMAsJudge + SQL templates
+│   └── policy_evaluator.py    ← OPAPolicyEvaluator + policy SQL templates
 │
 │   Evaluation Harness
 │   ├── trace_evaluator.py     ← BigQueryTraceEvaluator, trajectory matching, replay

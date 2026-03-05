@@ -17,6 +17,8 @@ a consumption-layer toolkit for agent observability at scale.
   non-deterministic agents
 - **Grader Composition** -- Combine code + LLM graders via weighted, binary, or
   majority strategies
+- **OPA Policy Evaluation (POC)** -- Evaluate traces with OPA policy decisions
+  via BigQuery Remote Functions (Cloud Run) or preview Python UDF mode
 - **Eval Suite Management** -- Lifecycle management with graduation, saturation
   detection, and balance checking
 - **Eval Quality Validation** -- Static checks for ambiguous tasks, class
@@ -136,6 +138,7 @@ bigquery_agent_analytics/
 ├── evaluators.py            # CodeEvaluator + LLMAsJudge
 ├── trace.py                 # Trace reconstruction & visualization
 ├── trace_evaluator.py       # Trajectory matching & replay
+├── policy_evaluator.py      # OPA policy evaluator + SQL templates
 ├── multi_trial.py           # Multi-trial runner + pass@k
 ├── grader_pipeline.py       # Grader composition pipeline
 ├── eval_suite.py            # Eval suite lifecycle management

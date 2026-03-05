@@ -58,6 +58,7 @@ try:
   from .insights import InsightsConfig
   from .insights import InsightsReport
   from .insights import SessionFacet
+  from .policy_evaluator import OPAPolicyEvaluator
   from .trace import ContentPart
   from .trace import EventType
   from .trace import ObjectRef
@@ -77,6 +78,7 @@ try:
           "TraceFilter",
           "ViewManager",
           "CodeEvaluator",
+          "OPAPolicyEvaluator",
           "LLMAsJudge",
           "EvaluationReport",
           "SessionScore",

@@ -47,6 +47,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import logging
+import re
 from typing import Any, Optional
 
 from google.cloud import bigquery
@@ -82,6 +83,13 @@ from .insights import parse_facet_response
 from .insights import run_analysis_prompt
 from .insights import SessionFacet
 from .insights import SessionMetadata
+from .policy_evaluator import build_create_or_replace_table_query
+from .policy_evaluator import build_decision_rows_query
+from .policy_evaluator import build_event_count_query
+from .policy_evaluator import build_policy_decisions_query
+from .policy_evaluator import build_script_with_python_udf
+from .policy_evaluator import build_session_summary_query
+from .policy_evaluator import OPAPolicyEvaluator
 from .trace import Span
 from .trace import Trace
 from .trace import TraceFilter
@@ -791,7 +799,7 @@ class Client:
 
   def evaluate(
       self,
-      evaluator: CodeEvaluator | LLMAsJudge,
+      evaluator: CodeEvaluator | LLMAsJudge | OPAPolicyEvaluator,
       filters: Optional[TraceFilter] = None,
       dataset: Optional[str] = None,
       strict: bool = False,
@@ -804,7 +812,8 @@ class Client:
     ``ML.GENERATE_TEXT`` for zero-ETL evaluation.
 
     Args:
-        evaluator: A CodeEvaluator or LLMAsJudge instance.
+        evaluator: A ``CodeEvaluator``, ``LLMAsJudge``, or
+            ``OPAPolicyEvaluator`` instance.
         filters: Optional trace filters.
         dataset: Optional table name override.
         strict: When ``True``, sessions with unparseable or
@@ -824,6 +833,13 @@ class Client:
 
     if isinstance(evaluator, CodeEvaluator):
       return self._evaluate_code(
+          evaluator,
+          table,
+          where,
+          params,
+      )
+    elif isinstance(evaluator, OPAPolicyEvaluator):
+      return self._evaluate_policy(
           evaluator,
           table,
           where,
@@ -874,6 +890,243 @@ class Client:
         dataset=f"{self._table_ref} WHERE {where}",
         session_scores=session_scores,
     )
+
+  def _evaluate_policy(
+      self,
+      evaluator: OPAPolicyEvaluator,
+      table: str,
+      where: str,
+      params: list,
+  ) -> EvaluationReport:
+    """Runs OPA policy evaluation via BigQuery SQL."""
+    evaluator.validate()
+
+    source_table, primary_count, fallback_count = self._select_policy_source_table(
+        evaluator=evaluator,
+        table=table,
+        where=where,
+        params=params,
+    )
+    policy_params = self._build_policy_query_params(
+        evaluator=evaluator,
+        base_params=params,
+    )
+    decisions_query = build_policy_decisions_query(
+        project=self.project_id,
+        dataset=self.dataset_id,
+        table=source_table,
+        where=where,
+        evaluator=evaluator,
+    )
+    uses_python_udf = evaluator.mode == "python_udf_preview"
+
+    source_query = decisions_query
+    persisted_table_ref = None
+    if evaluator.persist_table:
+      persisted_table_ref = (
+          f"{self.project_id}.{self.dataset_id}.{evaluator.persist_table}"
+      )
+      persist_query = build_create_or_replace_table_query(
+          project=self.project_id,
+          dataset=self.dataset_id,
+          table=evaluator.persist_table,
+          decisions_query=decisions_query,
+          with_python_udf_prefix=uses_python_udf,
+      )
+      persist_cfg = self._policy_query_config(
+          query=persist_query,
+          query_parameters=policy_params,
+          evaluator=evaluator,
+      )
+      self.bq_client.query(
+          persist_query,
+          job_config=persist_cfg,
+      ).result()
+      source_query = f"SELECT * FROM `{persisted_table_ref}`"
+
+    summary_query = build_session_summary_query(source_query)
+    if uses_python_udf and not evaluator.persist_table:
+      summary_query = build_script_with_python_udf(summary_query)
+    summary_cfg = self._policy_query_config(
+        query=summary_query,
+        query_parameters=policy_params,
+        evaluator=evaluator,
+    )
+    summary_rows = list(
+        self.bq_client.query(summary_query, job_config=summary_cfg).result()
+    )
+
+    session_scores = []
+    for row in summary_rows:
+      deny_count = _as_int(row.get("deny_count"))
+      warn_count = _as_int(row.get("warn_count"))
+      evaluated_events = _as_int(row.get("evaluated_events"))
+      critical_count = _as_int(row.get("critical_count"))
+      policy_compliance = _as_float(row.get("policy_compliance"))
+      critical_rate = _as_float(row.get("critical_violation_rate"))
+      session_scores.append(
+          SessionScore(
+              session_id=row.get("session_id", "unknown"),
+              scores={
+                  "policy_compliance": policy_compliance,
+                  "critical_violation_rate": critical_rate,
+              },
+              passed=deny_count == 0,
+              details={
+                  "evaluated_events": evaluated_events,
+                  "deny_count": deny_count,
+                  "warn_count": warn_count,
+                  "critical_count": critical_count,
+              },
+          )
+      )
+
+    report = _build_report(
+        evaluator_name=evaluator.name,
+        dataset=f"{self.project_id}.{self.dataset_id}.{source_table} WHERE {where}",
+        session_scores=session_scores,
+    )
+    report.details.update(
+        {
+            "policy_id": evaluator.policy_id,
+            "policy_version": evaluator.policy_version,
+            "policy_mode": evaluator.mode,
+            "source_table": source_table,
+            "primary_table_event_count": primary_count,
+            "fallback_table_event_count": fallback_count,
+            "fallback_used": source_table != table,
+            "persisted_table": persisted_table_ref,
+        }
+    )
+
+    if evaluator.return_decisions:
+      decision_rows_query = build_decision_rows_query(source_query)
+      if uses_python_udf and not evaluator.persist_table:
+        decision_rows_query = build_script_with_python_udf(decision_rows_query)
+      decision_cfg = self._policy_query_config(
+          query=decision_rows_query,
+          query_parameters=policy_params,
+          evaluator=evaluator,
+      )
+      decision_rows = list(
+          self.bq_client.query(
+              decision_rows_query,
+              job_config=decision_cfg,
+          ).result()
+      )
+      report.details["policy_decisions"] = [dict(row) for row in decision_rows]
+
+    return report
+
+  def _select_policy_source_table(
+      self,
+      *,
+      evaluator: OPAPolicyEvaluator,
+      table: str,
+      where: str,
+      params: list,
+  ) -> tuple[str, int, int]:
+    """Selects source table, optionally falling back to seed table."""
+    primary_count = self._count_policy_events(
+        table=table,
+        where=where,
+        evaluator=evaluator,
+        params=params,
+    )
+    fallback_count = -1
+    if primary_count > 0 or not evaluator.allow_fallback_seed_table:
+      return table, primary_count, fallback_count
+
+    fallback_table = evaluator.fallback_table_id
+    if fallback_table == table:
+      return table, primary_count, fallback_count
+
+    fallback_count = self._count_policy_events(
+        table=fallback_table,
+        where=where,
+        evaluator=evaluator,
+        params=params,
+    )
+    if fallback_count > 0:
+      logger.info(
+          "Primary table had no matching rows; using fallback table %s",
+          fallback_table,
+      )
+      return fallback_table, primary_count, fallback_count
+
+    return table, primary_count, fallback_count
+
+  def _count_policy_events(
+      self,
+      *,
+      table: str,
+      where: str,
+      evaluator: OPAPolicyEvaluator,
+      params: list,
+  ) -> int:
+    """Counts candidate source events for policy evaluation."""
+    count_query = build_event_count_query(
+        project=self.project_id,
+        dataset=self.dataset_id,
+        table=table,
+        where=where,
+    )
+    count_params = self._build_policy_query_params(
+        evaluator=evaluator,
+        base_params=params,
+    )
+    count_cfg = self._policy_query_config(
+        query=count_query,
+        query_parameters=count_params,
+        evaluator=evaluator,
+    )
+    try:
+      rows = list(self.bq_client.query(count_query, job_config=count_cfg).result())
+      if not rows:
+        return 0
+      return _as_int(rows[0].get("event_count"))
+    except Exception as e:
+      logger.warning("Failed counting policy events for table %s: %s", table, e)
+      return -1
+
+  @staticmethod
+  def _policy_query_config(
+      *,
+      query: str,
+      query_parameters: list,
+      evaluator: OPAPolicyEvaluator,
+  ) -> bigquery.QueryJobConfig:
+    """Builds BigQuery query config for policy evaluation."""
+    filtered_params = _filter_query_params(
+        query=query,
+        query_parameters=query_parameters,
+    )
+    return bigquery.QueryJobConfig(
+        query_parameters=filtered_params,
+        maximum_bytes_billed=evaluator.max_bytes_billed,
+    )
+
+  @staticmethod
+  def _build_policy_query_params(
+      *,
+      evaluator: OPAPolicyEvaluator,
+      base_params: list,
+  ) -> list:
+    """Builds policy query parameters based on evaluator settings."""
+    return list(base_params) + [
+        bigquery.ScalarQueryParameter(
+            "policy_id", "STRING", evaluator.policy_id
+        ),
+        bigquery.ScalarQueryParameter(
+            "policy_version", "STRING", evaluator.policy_version
+        ),
+        bigquery.ScalarQueryParameter(
+            "policy_lookback_hours", "INT64", evaluator.lookback_hours
+        ),
+        bigquery.ScalarQueryParameter(
+            "policy_max_events", "INT64", evaluator.max_events
+        ),
+    ]
 
   @staticmethod
   def _is_legacy_model_ref(ref: str) -> bool:
@@ -1692,6 +1945,39 @@ def _build_report(
       aggregate_scores=aggregate,
       session_scores=session_scores,
   )
+
+
+def _as_int(value: Any) -> int:
+  """Safely coerces a value to int."""
+  try:
+    return int(value)
+  except (TypeError, ValueError):
+    return 0
+
+
+def _as_float(value: Any) -> float:
+  """Safely coerces a value to float."""
+  try:
+    return float(value)
+  except (TypeError, ValueError):
+    return 0.0
+
+
+def _filter_query_params(
+    *,
+    query: str,
+    query_parameters: list,
+) -> list:
+  """Returns only query parameters referenced by ``@name`` in SQL."""
+  referenced = set(re.findall(r"@([A-Za-z_][A-Za-z0-9_]*)", query))
+  if not referenced:
+    return []
+  filtered = []
+  for param in query_parameters:
+    name = getattr(param, "name", None)
+    if name in referenced:
+      filtered.append(param)
+  return filtered
 
 
 def _merge_criterion_reports(
