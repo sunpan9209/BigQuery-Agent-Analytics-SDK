@@ -16,8 +16,8 @@
 set -euo pipefail
 
 MODE="${1:-}"
-PROJECT="${2:-${PROJECT_ID:-rag-chatbot-485501}}"
-DATASET="${3:-${DATASET_ID:-agent_trace}}"
+PROJECT="${2:-${PROJECT_ID:-}}"
+DATASET="${3:-${DATASET_ID:-}}"
 SOURCE_TABLE="${4:-${SOURCE_TABLE:-agent_events}}"
 RUN_REGION="${5:-${RUN_REGION:-us-central1}}"
 
@@ -39,12 +39,14 @@ INITIAL_LOOKBACK_MINUTES="${INITIAL_LOOKBACK_MINUTES:-30}"
 usage() {
   cat <<EOF
 Usage:
-  ./setup.sh up [PROJECT] [DATASET] [SOURCE_TABLE] [RUN_REGION]
+  ./setup.sh up PROJECT DATASET [SOURCE_TABLE] [RUN_REGION]
   ./setup.sh down
 
-Defaults:
-  PROJECT=${PROJECT}
-  DATASET=${DATASET}
+Required for "up":
+  PROJECT or PROJECT_ID
+  DATASET or DATASET_ID
+
+Defaults for optional "up" arguments:
   SOURCE_TABLE=${SOURCE_TABLE}
   RUN_REGION=${RUN_REGION}
 
@@ -55,6 +57,19 @@ Environment overrides:
   POLL_SCHEDULE, SCHEDULER_TIME_ZONE
   OVERLAP_MINUTES, INITIAL_LOOKBACK_MINUTES
 EOF
+}
+
+require_up_inputs() {
+  if [[ -z "$PROJECT" || -z "$DATASET" ]]; then
+    cat >&2 <<EOF
+PROJECT and DATASET are required for "up".
+
+Examples:
+  ./setup.sh up my-project agent_trace agent_events us-central1
+  PROJECT_ID=my-project DATASET_ID=agent_trace ./setup.sh up
+EOF
+    exit 1
+  fi
 }
 
 require_tool() {
@@ -184,7 +199,40 @@ ensure_scheduler_service_account() {
     --project="$PROJECT" \
     --display-name="Streaming evaluation scheduler" \
     >/dev/null
+  wait_for_service_account "$email"
   echo "${email}|true"
+}
+
+wait_for_service_account() {
+  local scheduler_sa_email="$1"
+  local attempt
+
+  for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    if gcloud iam service-accounts describe "$scheduler_sa_email" \
+      --project="$PROJECT" >/dev/null 2>&1; then
+      return
+    fi
+    sleep 5
+  done
+
+  echo "Service account did not become visible in IAM: ${scheduler_sa_email}" >&2
+  return 1
+}
+
+ensure_scheduler_oidc_binding() {
+  local scheduler_sa_email="$1"
+  local project_number
+  local scheduler_service_agent
+
+  wait_for_service_account "$scheduler_sa_email"
+  project_number="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')"
+  scheduler_service_agent="service-${project_number}@gcp-sa-cloudscheduler.iam.gserviceaccount.com"
+
+  gcloud iam service-accounts add-iam-policy-binding "$scheduler_sa_email" \
+    --project="$PROJECT" \
+    --member="serviceAccount:${scheduler_service_agent}" \
+    --role="roles/iam.serviceAccountOpenIdTokenCreator" \
+    --quiet >/dev/null
 }
 
 deploy_worker() {
@@ -193,16 +241,8 @@ deploy_worker() {
   staging="$(mktemp -d)"
 
   cp "$SCRIPT_DIR/main.py" "$SCRIPT_DIR/worker.py" "$staging/"
+  cp "$SCRIPT_DIR/requirements.txt" "$staging/"
   cp -R "$REPO_ROOT/src" "$staging/"
-
-  cat > "$staging/requirements.txt" <<REQS
-flask>=3.0.0
-gunicorn>=22.0.0
-google-cloud-bigquery>=3.0.0
-google-adk>=1.0.0
-pydantic>=2.0.0
-typer>=0.9.0
-REQS
 
   cat > "$staging/Procfile" <<'PROCFILE'
 web: gunicorn --bind :$PORT --workers 1 --timeout 300 --graceful-timeout 30 main:app
@@ -235,7 +275,11 @@ service_url() {
 ensure_scheduler_job() {
   local scheduler_sa_email="$1"
   local url="$2"
+  local error_file
+  local error_output
+  local attempt
 
+  wait_for_service_account "$scheduler_sa_email"
   gcloud run services add-iam-policy-binding "$SERVICE_NAME" \
     --project="$PROJECT" \
     --region="$RUN_REGION" \
@@ -252,19 +296,33 @@ ensure_scheduler_job() {
       --quiet >/dev/null
   fi
 
-  gcloud scheduler jobs create http "$SCHEDULER_JOB_NAME" \
-    --project="$PROJECT" \
-    --location="$RUN_REGION" \
-    --schedule="$POLL_SCHEDULE" \
-    --time-zone="$SCHEDULER_TIME_ZONE" \
-    --uri="${url}/" \
-    --http-method=POST \
-    --headers=Content-Type=application/json \
-    --message-body='{}' \
-    --oidc-service-account-email="$scheduler_sa_email" \
-    --oidc-token-audience="$url" \
-    --attempt-deadline=300s \
-    >/dev/null
+  error_file="$(mktemp)"
+  for attempt in 1 2 3 4 5; do
+    if gcloud scheduler jobs create http "$SCHEDULER_JOB_NAME" \
+      --project="$PROJECT" \
+      --location="$RUN_REGION" \
+      --schedule="$POLL_SCHEDULE" \
+      --time-zone="$SCHEDULER_TIME_ZONE" \
+      --uri="${url}/" \
+      --http-method=POST \
+      --headers=Content-Type=application/json \
+      --message-body='{}' \
+      --oidc-service-account-email="$scheduler_sa_email" \
+      --oidc-token-audience="$url" \
+      --attempt-deadline=300s \
+      >/dev/null 2>"$error_file"; then
+      rm -f "$error_file"
+      return
+    fi
+
+    error_output="$(cat "$error_file")"
+    if [[ "$error_output" != *"NOT_FOUND"* || "$attempt" -eq 5 ]]; then
+      rm -f "$error_file"
+      echo "$error_output" >&2
+      return 1
+    fi
+    sleep 5
+  done
 }
 
 write_state() {
@@ -294,6 +352,7 @@ up() {
   require_tool jq
   require_tool bq
   require_tool gcloud
+  require_up_inputs
 
   enable_service_if_needed run.googleapis.com
   enable_service_if_needed cloudbuild.googleapis.com
@@ -313,12 +372,13 @@ up() {
   scheduler_sa_result="$(ensure_scheduler_service_account)"
   local scheduler_sa_email="${scheduler_sa_result%%|*}"
   local scheduler_sa_created="${scheduler_sa_result##*|}"
+  ensure_scheduler_oidc_binding "$scheduler_sa_email"
+
+  write_state "$bq_location" "$scheduler_sa_email" "$scheduler_sa_created"
 
   local url
   url="$(service_url)"
   ensure_scheduler_job "$scheduler_sa_email" "$url"
-
-  write_state "$bq_location" "$scheduler_sa_email" "$scheduler_sa_created"
 
   cat <<EOF
 Streaming evaluation scheduler deployed.

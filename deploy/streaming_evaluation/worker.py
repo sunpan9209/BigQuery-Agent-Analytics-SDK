@@ -236,6 +236,7 @@ def handle_scheduled_run(
   config = None
   scan_start = None
   stats = RunStats()
+  success_history_written = False
 
   try:
     client = build_client_from_context({})
@@ -251,6 +252,9 @@ def handle_scheduled_run(
 
     for trigger in iter_triggers(client, config, scan_start, run_started_at):
       stats.trigger_rows_found += 1
+      if isinstance(trigger, _IgnoredTrigger):
+        stats.ignored_rows += 1
+        continue
       if not trigger.session_id:
         logger.warning("Ignoring trigger row without session_id")
         stats.ignored_rows += 1
@@ -275,7 +279,6 @@ def handle_scheduled_run(
       else:
         stats.duplicate_rows += 1
 
-    update_checkpoint(client, config, run_started_at)
     write_run_history(
         client=client,
         config=config,
@@ -287,9 +290,15 @@ def handle_scheduled_run(
         status="success",
         error_message=None,
     )
+    success_history_written = True
+    update_checkpoint(client, config, run_started_at)
   except Exception as exc:  # pragma: no cover - exercised in tests
     logger.exception("Scheduled streaming evaluation run failed")
-    if client is not None and config is not None:
+    if (
+        client is not None
+        and config is not None
+        and not success_history_written
+    ):
       try:
         write_run_history(
             client=client,

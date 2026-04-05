@@ -410,6 +410,44 @@ class TestWorker:
     assert response["ignored_rows"] == 1
     client.evaluate.assert_not_called()
 
+  def test_malformed_row_is_counted_once(
+      self,
+      streaming_worker,
+      monkeypatch,
+      caplog,
+  ):
+    fake_bq = _FakeBigQueryClient(
+        trigger_rows=[
+            {
+                "session_id": "sess-1",
+                "trace_id": "trace-1",
+                "span_id": "span-1",
+                "status": "OK",
+                "error_message": None,
+                "trigger_timestamp": _NOW,
+            }
+        ]
+    )
+    client = MagicMock()
+    client.project_id = "proj"
+    client.dataset_id = "agent_trace"
+    client.table_id = "agent_events"
+    client.bq_client = fake_bq
+    monkeypatch.setattr(
+        streaming_worker,
+        "build_client_from_context",
+        MagicMock(return_value=client),
+    )
+
+    response, status = streaming_worker.handle_scheduled_run({}, now=_NOW)
+
+    assert status == 200
+    assert response["ignored_rows"] == 1
+    assert caplog.messages == [
+        "Ignoring malformed trigger row: Missing required trigger fields: event_type, trigger_kind"
+    ]
+    client.evaluate.assert_not_called()
+
   def test_bigquery_or_evaluation_failure_retries(
       self,
       streaming_worker,
@@ -445,6 +483,47 @@ class TestWorker:
 
     assert status == 500
     assert response["status"] == "retry"
+
+  def test_checkpoint_does_not_advance_if_success_history_write_fails(
+      self,
+      streaming_worker,
+      monkeypatch,
+  ):
+    fake_bq = _FakeBigQueryClient(
+        trigger_rows=[
+            {
+                "session_id": "sess-1",
+                "trace_id": "trace-1",
+                "span_id": "span-1",
+                "event_type": "AGENT_COMPLETED",
+                "status": "OK",
+                "error_message": None,
+                "trigger_timestamp": _NOW,
+                "trigger_kind": "session_terminal",
+            }
+        ],
+        error_on="INSERT INTO",
+    )
+    client = MagicMock()
+    client.project_id = "proj"
+    client.dataset_id = "agent_trace"
+    client.table_id = "agent_events"
+    client.bq_client = fake_bq
+    client.evaluate.return_value = _report()
+    monkeypatch.setattr(
+        streaming_worker,
+        "build_client_from_context",
+        MagicMock(return_value=client),
+    )
+
+    response, status = streaming_worker.handle_scheduled_run({}, now=_NOW)
+
+    assert status == 500
+    assert response["status"] == "retry"
+    state_queries = [
+        query for query in fake_bq.queries if "_streaming_eval_state" in query
+    ]
+    assert len(state_queries) == 1
 
   def test_same_session_can_emit_error_and_terminal_rows(
       self,
@@ -529,14 +608,22 @@ class TestDeployAssets:
   def test_setup_assets_point_to_scheduler_and_state_tables(self):
     setup_sh = (_ROOT / "deploy/streaming_evaluation/setup.sh").read_text()
     readme = (_ROOT / "deploy/streaming_evaluation/README.md").read_text()
+    requirements = (
+        _ROOT / "deploy/streaming_evaluation/requirements.txt"
+    ).read_text()
 
     assert ".streaming_evaluation_state.json" in setup_sh
     assert "streaming_evaluation_results" in setup_sh
     assert "_streaming_eval_state" in setup_sh
     assert "_streaming_eval_runs" in setup_sh
+    assert 'PROJECT and DATASET are required for "up"' in setup_sh
+    assert 'cp "$SCRIPT_DIR/requirements.txt" "$staging/"' in setup_sh
+    assert "wait_for_service_account" in setup_sh
     assert "scheduler jobs create http" in setup_sh
     assert "cloudscheduler.googleapis.com" in setup_sh
+    assert "roles/iam.serviceAccountOpenIdTokenCreator" in setup_sh
     assert "--timeout 300" in setup_sh
     assert "Cloud Scheduler" in readme
     assert "No special BigQuery reservation is required" in readme
     assert "enable the required Cloud Run" in readme
+    assert "pyyaml>=6.0" in requirements

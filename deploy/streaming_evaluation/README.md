@@ -52,7 +52,7 @@ Artifact Registry, and Cloud Scheduler APIs automatically.
 
 ```bash
 cd deploy/streaming_evaluation
-./setup.sh up rag-chatbot-485501 agent_trace agent_events us-central1
+./setup.sh up my-project agent_trace agent_events us-central1
 ```
 
 The script will:
@@ -68,7 +68,7 @@ After setup, read results directly from BigQuery:
 
 ```sql
 SELECT *
-FROM `rag-chatbot-485501.agent_trace.streaming_evaluation_results`
+FROM `my-project.agent_trace.streaming_evaluation_results`
 ORDER BY processed_at DESC
 LIMIT 20;
 ```
