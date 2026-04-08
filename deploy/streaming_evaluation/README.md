@@ -15,7 +15,7 @@ flowchart LR
 ## What Launches
 
 - terminal rows: `event_type = 'AGENT_COMPLETED'`
-- error rows: `event_type = 'TOOL_ERROR' OR status = 'ERROR' OR error_message IS NOT NULL`
+- error rows: `event_type = 'TOOL_ERROR' OR (status = 'ERROR' AND error_message IS NOT NULL)`
 - evaluator profile: `streaming_observability_v1`
 - default cadence: every `5` minutes
 - default overlap window: `15` minutes
@@ -93,6 +93,16 @@ cd deploy/streaming_evaluation
 `down` deletes the Cloud Scheduler job, removes the Cloud Run service,
 removes the scheduler service account only if this setup created it, and
 deletes the local state file.
+
+`down` intentionally preserves the BigQuery tables:
+
+- `streaming_evaluation_results`
+- `_streaming_eval_state`
+- `_streaming_eval_runs`
+
+This keeps prior evaluation output and internal audit history queryable
+after the deployment is removed. If you want to drop them too, remove
+them manually with `bq rm -t`.
 
 ## Customization
 

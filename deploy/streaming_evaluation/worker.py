@@ -68,8 +68,10 @@ WHERE timestamp >= @scan_start
   AND (
     event_type = 'AGENT_COMPLETED'
     OR event_type = 'TOOL_ERROR'
-    OR status = 'ERROR'
-    OR error_message IS NOT NULL
+    OR (
+      status = 'ERROR'
+      AND error_message IS NOT NULL
+    )
   )
 ORDER BY trigger_timestamp ASC
 """
@@ -268,9 +270,12 @@ def handle_scheduled_run(
           ),
       )
       if report.total_sessions == 0:
-        raise RuntimeError(
-            f"No evaluation rows returned for session_id={trigger.session_id}"
+        logger.warning(
+            "No events found for session_id=%s; skipping trigger",
+            trigger.session_id,
         )
+        stats.ignored_rows += 1
+        continue
 
       result_row = serialize_streaming_result_row(trigger, report)
       inserted = persist_result_row(client, config, result_row)

@@ -26,7 +26,9 @@ WHERE timestamp >= SCAN_START
   AND (
     event_type = 'AGENT_COMPLETED'
     OR event_type = 'TOOL_ERROR'
-    OR status = 'ERROR'
-    OR error_message IS NOT NULL
+    OR (
+      status = 'ERROR'
+      AND error_message IS NOT NULL
+    )
   )
 ORDER BY trigger_timestamp ASC;

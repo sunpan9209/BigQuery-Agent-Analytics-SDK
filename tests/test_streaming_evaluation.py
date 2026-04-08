@@ -54,6 +54,15 @@ def _import_module(name: str, relative_path: str):
   return mod
 
 
+def _normalize_sql(sql_text: str) -> str:
+  lines = [
+      line.strip()
+      for line in sql_text.splitlines()
+      if line.strip() and not line.strip().startswith("--")
+  ]
+  return " ".join(lines).rstrip(";")
+
+
 def _report() -> EvaluationReport:
   return EvaluationReport(
       dataset="test",
@@ -80,6 +89,20 @@ def _report() -> EvaluationReport:
               details={"checked": True},
           )
       ],
+  )
+
+
+def _empty_report() -> EvaluationReport:
+  return EvaluationReport(
+      dataset="test",
+      evaluator_name=STREAMING_EVALUATOR_PROFILE,
+      total_sessions=0,
+      passed_sessions=0,
+      failed_sessions=0,
+      aggregate_scores={},
+      details={"source": "unit-test"},
+      created_at=_NOW,
+      session_scores=[],
   )
 
 
@@ -166,6 +189,18 @@ class TestSharedRuntime:
     assert options["location"] == "US"
     assert options["verify_schema"] is False
 
+  def test_resolve_client_options_leaves_location_unset_by_default(
+      self,
+      monkeypatch,
+  ):
+    monkeypatch.setenv("BQ_AGENT_PROJECT", "env-project")
+    monkeypatch.setenv("BQ_AGENT_DATASET", "env-dataset")
+    monkeypatch.delenv("BQ_AGENT_LOCATION", raising=False)
+
+    options = resolve_client_options({})
+
+    assert options["location"] is None
+
   def test_remote_and_streaming_import_same_resolver(
       self,
       rf_dispatch,
@@ -205,11 +240,16 @@ class TestHelpers:
   def test_classify_trigger_kind_prefers_terminal_then_error(self):
     assert classify_trigger_kind("AGENT_COMPLETED") == "session_terminal"
     assert classify_trigger_kind("TOOL_ERROR") == "error_event"
-    assert classify_trigger_kind("AGENT_STEP", status="ERROR") == "error_event"
     assert (
-        classify_trigger_kind("AGENT_STEP", error_message="boom")
+        classify_trigger_kind(
+            "AGENT_STEP",
+            status="ERROR",
+            error_message="boom",
+        )
         == "error_event"
     )
+    assert classify_trigger_kind("AGENT_STEP", status="ERROR") is None
+    assert classify_trigger_kind("AGENT_STEP", error_message="boom") is None
     assert classify_trigger_kind("AGENT_STEP") is None
 
   def test_parse_trigger_row_classifies_from_overlap_scan_fields(self):
@@ -484,6 +524,47 @@ class TestWorker:
     assert status == 500
     assert response["status"] == "retry"
 
+  def test_zero_session_report_is_skipped_not_retried(
+      self,
+      streaming_worker,
+      monkeypatch,
+      caplog,
+  ):
+    fake_bq = _FakeBigQueryClient(
+        trigger_rows=[
+            {
+                "session_id": "sess-1",
+                "trace_id": "trace-1",
+                "span_id": "span-1",
+                "event_type": "AGENT_COMPLETED",
+                "status": "OK",
+                "error_message": None,
+                "trigger_timestamp": _NOW,
+                "trigger_kind": "session_terminal",
+            }
+        ]
+    )
+    client = MagicMock()
+    client.project_id = "proj"
+    client.dataset_id = "agent_trace"
+    client.table_id = "agent_events"
+    client.bq_client = fake_bq
+    client.evaluate.return_value = _empty_report()
+    monkeypatch.setattr(
+        streaming_worker,
+        "build_client_from_context",
+        MagicMock(return_value=client),
+    )
+
+    response, status = streaming_worker.handle_scheduled_run({}, now=_NOW)
+
+    assert status == 200
+    assert response["processed_rows"] == 0
+    assert response["ignored_rows"] == 1
+    assert caplog.messages[-1] == (
+        "No events found for session_id=sess-1; skipping trigger"
+    )
+
   def test_checkpoint_does_not_advance_if_success_history_write_fails(
       self,
       streaming_worker,
@@ -591,6 +672,29 @@ class TestDeployAssets:
     assert "event_type = 'TOOL_ERROR'" in sql
     assert "status = 'ERROR'" in sql
     assert "error_message IS NOT NULL" in sql
+    assert "OR status = 'ERROR'" not in sql
+
+  def test_trigger_query_matches_worker_scan_query(self, streaming_worker):
+    sql = (_ROOT / "deploy/streaming_evaluation/trigger_query.sql").read_text()
+    normalized_file = (
+        _normalize_sql(sql)
+        .replace(
+            "`PROJECT.DATASET.SOURCE_TABLE`",
+            "`{project}.{dataset}.{table}`",
+        )
+        .replace(
+            "SCAN_START",
+            "@scan_start",
+        )
+        .replace(
+            "SCAN_END",
+            "@scan_end",
+        )
+    )
+
+    assert normalized_file == _normalize_sql(
+        streaming_worker._TRIGGER_SCAN_QUERY
+    )
 
   def test_trigger_query_contains_expected_scan_fields(self):
     sql = (_ROOT / "deploy/streaming_evaluation/trigger_query.sql").read_text()
@@ -626,4 +730,6 @@ class TestDeployAssets:
     assert "Cloud Scheduler" in readme
     assert "No special BigQuery reservation is required" in readme
     assert "enable the required Cloud Run" in readme
+    assert "BigQuery tables were preserved intentionally" in setup_sh
+    assert "intentionally preserves the BigQuery tables" in readme
     assert "pyyaml>=6.0" in requirements

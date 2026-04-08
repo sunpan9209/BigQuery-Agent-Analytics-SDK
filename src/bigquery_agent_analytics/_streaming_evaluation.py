@@ -106,11 +106,9 @@ def classify_trigger_kind(
   """Classify an event row into a launch trigger kind."""
   if event_type == "AGENT_COMPLETED":
     return TRIGGER_KIND_SESSION_TERMINAL
-  if (
-      event_type == "TOOL_ERROR"
-      or status == "ERROR"
-      or error_message is not None
-  ):
+  if event_type == "TOOL_ERROR":
+    return TRIGGER_KIND_ERROR_EVENT
+  if status == "ERROR" and error_message is not None:
     return TRIGGER_KIND_ERROR_EVENT
   return None
 

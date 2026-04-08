@@ -413,13 +413,21 @@ down() {
   local down_region
   local down_service
   local down_job
+  local down_dataset
+  local down_result_table
+  local down_state_table
+  local down_runs_table
   local scheduler_sa_email
   local scheduler_sa_created
 
   down_project="$(jq -r '.project' "$STATE_FILE")"
+  down_dataset="$(jq -r '.dataset' "$STATE_FILE")"
   down_region="$(jq -r '.run_region' "$STATE_FILE")"
   down_service="$(jq -r '.service_name' "$STATE_FILE")"
   down_job="$(jq -r '.scheduler_job_name' "$STATE_FILE")"
+  down_result_table="$(jq -r '.result_table' "$STATE_FILE")"
+  down_state_table="$(jq -r '.state_table' "$STATE_FILE")"
+  down_runs_table="$(jq -r '.runs_table' "$STATE_FILE")"
   scheduler_sa_email="$(jq -r '.scheduler_service_account' "$STATE_FILE")"
   scheduler_sa_created="$(jq -r '.scheduler_service_account_created' "$STATE_FILE")"
 
@@ -440,7 +448,19 @@ down() {
   fi
 
   rm -f "$STATE_FILE"
-  echo "Streaming evaluation scheduler resources removed."
+  cat <<EOF
+Streaming evaluation scheduler resources removed.
+
+BigQuery tables were preserved intentionally:
+  ${down_project}.${down_dataset}.${down_result_table}
+  ${down_project}.${down_dataset}.${down_state_table}
+  ${down_project}.${down_dataset}.${down_runs_table}
+
+To remove them manually:
+  bq rm -t ${down_project}:${down_dataset}.${down_result_table}
+  bq rm -t ${down_project}:${down_dataset}.${down_state_table}
+  bq rm -t ${down_project}:${down_dataset}.${down_runs_table}
+EOF
 }
 
 case "$MODE" in

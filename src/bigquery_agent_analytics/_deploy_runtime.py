@@ -40,7 +40,7 @@ def resolve_client_options(
   )
   location = udc.get(
       "location",
-      os.environ.get("BQ_AGENT_LOCATION", "us-central1"),
+      os.environ.get("BQ_AGENT_LOCATION"),
   )
   endpoint = udc.get("endpoint") or os.environ.get("BQ_AGENT_ENDPOINT")
   connection_id = udc.get("connection_id") or os.environ.get(
