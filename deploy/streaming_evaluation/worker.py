@@ -164,33 +164,62 @@ WHEN NOT MATCHED THEN
   )
 """
 
-_RUNS_INSERT_QUERY = """\
-INSERT INTO `{project}.{dataset}.{table}` (
-  processor_name,
-  run_started_at,
-  run_finished_at,
-  scan_start,
-  scan_end,
-  trigger_rows_found,
-  processed_rows,
-  duplicate_rows,
-  ignored_rows,
-  status,
-  error_message
-)
-VALUES (
-  @processor_name,
-  @run_started_at,
-  @run_finished_at,
-  @scan_start,
-  @scan_end,
-  @trigger_rows_found,
-  @processed_rows,
-  @duplicate_rows,
-  @ignored_rows,
-  @status,
-  @error_message
-)
+_RUNS_MERGE_QUERY = """\
+MERGE `{project}.{dataset}.{table}` T
+USING (
+  SELECT
+    @processor_name AS processor_name,
+    @run_started_at AS run_started_at,
+    @run_finished_at AS run_finished_at,
+    @scan_start AS scan_start,
+    @scan_end AS scan_end,
+    @trigger_rows_found AS trigger_rows_found,
+    @processed_rows AS processed_rows,
+    @duplicate_rows AS duplicate_rows,
+    @ignored_rows AS ignored_rows,
+    @status AS status,
+    @error_message AS error_message
+) S
+ON T.processor_name = S.processor_name
+  AND T.run_started_at = S.run_started_at
+WHEN MATCHED THEN
+  UPDATE SET
+    run_finished_at = S.run_finished_at,
+    scan_start = S.scan_start,
+    scan_end = S.scan_end,
+    trigger_rows_found = S.trigger_rows_found,
+    processed_rows = S.processed_rows,
+    duplicate_rows = S.duplicate_rows,
+    ignored_rows = S.ignored_rows,
+    status = S.status,
+    error_message = S.error_message
+WHEN NOT MATCHED THEN
+  INSERT (
+    processor_name,
+    run_started_at,
+    run_finished_at,
+    scan_start,
+    scan_end,
+    trigger_rows_found,
+    processed_rows,
+    duplicate_rows,
+    ignored_rows,
+    status,
+    error_message
+  )
+  VALUES (
+    S.processor_name,
+    S.run_started_at,
+    S.run_finished_at,
+    S.scan_start,
+    S.scan_end,
+    S.trigger_rows_found,
+    S.processed_rows,
+    S.duplicate_rows,
+    S.ignored_rows,
+    S.status,
+    S.error_message
+  )
 """
 
 
@@ -238,7 +267,7 @@ def handle_scheduled_run(
   config = None
   scan_start = None
   stats = RunStats()
-  success_history_written = False
+  success_run_finalized = False
 
   try:
     client = build_client_from_context({})
@@ -295,15 +324,11 @@ def handle_scheduled_run(
         status="success",
         error_message=None,
     )
-    success_history_written = True
     update_checkpoint(client, config, run_started_at)
+    success_run_finalized = True
   except Exception as exc:  # pragma: no cover - exercised in tests
     logger.exception("Scheduled streaming evaluation run failed")
-    if (
-        client is not None
-        and config is not None
-        and not success_history_written
-    ):
+    if client is not None and config is not None and not success_run_finalized:
       try:
         write_run_history(
             client=client,
@@ -318,7 +343,7 @@ def handle_scheduled_run(
         )
       except Exception:  # pragma: no cover - defensive
         logger.exception("Failed to persist streaming run history")
-    return {"status": "retry", "reason": str(exc)}, 500
+    return {"status": "retry", "reason": "internal error"}, 500
 
   return {
       "status": "processed",
@@ -340,7 +365,9 @@ def load_runtime_config(client) -> RuntimeConfig:
 
   result_project = os.environ.get("BQ_AGENT_RESULT_PROJECT", source_project)
   result_dataset = os.environ.get("BQ_AGENT_RESULT_DATASET", source_dataset)
-  result_table = os.environ.get("BQ_AGENT_RESULT_TABLE", STREAMING_RESULTS_TABLE)
+  result_table = os.environ.get(
+      "BQ_AGENT_RESULT_TABLE", STREAMING_RESULTS_TABLE
+  )
 
   state_project = os.environ.get("BQ_AGENT_STATE_PROJECT", result_project)
   state_dataset = os.environ.get("BQ_AGENT_STATE_DATASET", result_dataset)
@@ -381,7 +408,9 @@ def load_runtime_config(client) -> RuntimeConfig:
   )
 
 
-def iter_triggers(client, config: RuntimeConfig, scan_start: datetime, scan_end: datetime):
+def iter_triggers(
+    client, config: RuntimeConfig, scan_start: datetime, scan_end: datetime
+):
   """Yield normalized triggers from the overlap scan query."""
   query = _TRIGGER_SCAN_QUERY.format(
       project=config.source_project,
@@ -440,8 +469,12 @@ def persist_result_row(
   )
   job_config = bigquery.QueryJobConfig(
       query_parameters=[
-          bigquery.ScalarQueryParameter("dedupe_key", "STRING", row["dedupe_key"]),
-          bigquery.ScalarQueryParameter("session_id", "STRING", row["session_id"]),
+          bigquery.ScalarQueryParameter(
+              "dedupe_key", "STRING", row["dedupe_key"]
+          ),
+          bigquery.ScalarQueryParameter(
+              "session_id", "STRING", row["session_id"]
+          ),
           bigquery.ScalarQueryParameter("trace_id", "STRING", row["trace_id"]),
           bigquery.ScalarQueryParameter("span_id", "STRING", row["span_id"]),
           bigquery.ScalarQueryParameter(
@@ -476,7 +509,9 @@ def persist_result_row(
               "STRING",
               row["details_json"],
           ),
-          bigquery.ScalarQueryParameter("report_json", "STRING", row["report_json"]),
+          bigquery.ScalarQueryParameter(
+              "report_json", "STRING", row["report_json"]
+          ),
           bigquery.ScalarQueryParameter(
               "processed_at",
               "TIMESTAMP",
@@ -487,7 +522,15 @@ def persist_result_row(
 
   job = client.bq_client.query(query, job_config=job_config)
   job.result()
-  return bool(getattr(job, "num_dml_affected_rows", 0))
+  affected_rows = getattr(job, "num_dml_affected_rows", None)
+  if affected_rows is None:
+    logger.warning(
+        "BigQuery DML stats were unavailable for dedupe_key=%s; "
+        "treating the row as processed",
+        row["dedupe_key"],
+    )
+    return True
+  return bool(affected_rows)
 
 
 def update_checkpoint(
@@ -535,7 +578,7 @@ def write_run_history(
     error_message: str | None,
 ) -> None:
   """Write hidden run metadata for debugging and recovery analysis."""
-  query = _RUNS_INSERT_QUERY.format(
+  query = _RUNS_MERGE_QUERY.format(
       project=config.runs_project,
       dataset=config.runs_dataset,
       table=config.runs_table,
@@ -574,9 +617,13 @@ def write_run_history(
               "INT64",
               stats.duplicate_rows,
           ),
-          bigquery.ScalarQueryParameter("ignored_rows", "INT64", stats.ignored_rows),
+          bigquery.ScalarQueryParameter(
+              "ignored_rows", "INT64", stats.ignored_rows
+          ),
           bigquery.ScalarQueryParameter("status", "STRING", status),
-          bigquery.ScalarQueryParameter("error_message", "STRING", error_message),
+          bigquery.ScalarQueryParameter(
+              "error_message", "STRING", error_message
+          ),
       ]
   )
   client.bq_client.query(query, job_config=job_config).result()
@@ -601,8 +648,17 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
 
 
 def _env_int(name: str, default: int) -> int:
-  """Read an integer env var with a strict fallback."""
+  """Read an integer env var with a warning fallback."""
   raw = os.environ.get(name)
   if raw is None:
     return default
-  return int(raw)
+  try:
+    return int(raw)
+  except ValueError:
+    logger.warning(
+        "Invalid integer value for %s=%r; using default %s",
+        name,
+        raw,
+        default,
+    )
+    return default

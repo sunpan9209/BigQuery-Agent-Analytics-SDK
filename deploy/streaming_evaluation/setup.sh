@@ -239,6 +239,7 @@ deploy_worker() {
   local bq_location="$1"
   local staging
   staging="$(mktemp -d)"
+  trap 'rm -rf "$staging"' RETURN
 
   cp "$SCRIPT_DIR/main.py" "$SCRIPT_DIR/worker.py" "$staging/"
   cp "$SCRIPT_DIR/requirements.txt" "$staging/"
@@ -261,8 +262,6 @@ PROCFILE
     --max-instances=1 \
     --set-env-vars="PYTHONPATH=/workspace/src,BQ_AGENT_PROJECT=${PROJECT},BQ_AGENT_DATASET=${DATASET},BQ_AGENT_TABLE=${SOURCE_TABLE},BQ_AGENT_LOCATION=${bq_location},BQ_AGENT_RESULT_PROJECT=${PROJECT},BQ_AGENT_RESULT_DATASET=${DATASET},BQ_AGENT_RESULT_TABLE=${RESULT_TABLE},BQ_AGENT_STATE_PROJECT=${PROJECT},BQ_AGENT_STATE_DATASET=${DATASET},BQ_AGENT_STATE_TABLE=${STATE_TABLE},BQ_AGENT_RUNS_PROJECT=${PROJECT},BQ_AGENT_RUNS_DATASET=${DATASET},BQ_AGENT_RUNS_TABLE=${RUNS_TABLE},BQ_AGENT_OVERLAP_MINUTES=${OVERLAP_MINUTES},BQ_AGENT_INITIAL_LOOKBACK_MINUTES=${INITIAL_LOOKBACK_MINUTES}" \
     >/dev/null
-
-  rm -rf "$staging"
 }
 
 service_url() {
@@ -374,11 +373,10 @@ up() {
   local scheduler_sa_created="${scheduler_sa_result##*|}"
   ensure_scheduler_oidc_binding "$scheduler_sa_email"
 
-  write_state "$bq_location" "$scheduler_sa_email" "$scheduler_sa_created"
-
   local url
   url="$(service_url)"
   ensure_scheduler_job "$scheduler_sa_email" "$url"
+  write_state "$bq_location" "$scheduler_sa_email" "$scheduler_sa_created"
 
   cat <<EOF
 Streaming evaluation scheduler deployed.

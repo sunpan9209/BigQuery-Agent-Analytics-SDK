@@ -22,6 +22,7 @@ from datetime import timezone
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 import sys
 from unittest.mock import MagicMock
 
@@ -117,7 +118,7 @@ class _FakeSelectJob:
 
 class _FakeDmlJob:
 
-  def __init__(self, affected_rows: int = 1):
+  def __init__(self, affected_rows: int | None = 1):
     self.num_dml_affected_rows = affected_rows
 
   def result(self):
@@ -523,6 +524,7 @@ class TestWorker:
 
     assert status == 500
     assert response["status"] == "retry"
+    assert response["reason"] == "internal error"
 
   def test_zero_session_report_is_skipped_not_retried(
       self,
@@ -583,7 +585,7 @@ class TestWorker:
                 "trigger_kind": "session_terminal",
             }
         ],
-        error_on="INSERT INTO",
+        error_on="_streaming_eval_runs",
     )
     client = MagicMock()
     client.project_id = "proj"
@@ -605,6 +607,95 @@ class TestWorker:
         query for query in fake_bq.queries if "_streaming_eval_state" in query
     ]
     assert len(state_queries) == 1
+
+  def test_checkpoint_failure_rewrites_success_run_history_to_failed(
+      self,
+      streaming_worker,
+      monkeypatch,
+  ):
+    fake_bq = _FakeBigQueryClient(
+        trigger_rows=[
+            {
+                "session_id": "sess-1",
+                "trace_id": "trace-1",
+                "span_id": "span-1",
+                "event_type": "AGENT_COMPLETED",
+                "status": "OK",
+                "error_message": None,
+                "trigger_timestamp": _NOW,
+                "trigger_kind": "session_terminal",
+            }
+        ],
+        error_on="checkpoint_timestamp = S.checkpoint_timestamp",
+    )
+    client = MagicMock()
+    client.project_id = "proj"
+    client.dataset_id = "agent_trace"
+    client.table_id = "agent_events"
+    client.bq_client = fake_bq
+    client.evaluate.return_value = _report()
+    monkeypatch.setattr(
+        streaming_worker,
+        "build_client_from_context",
+        MagicMock(return_value=client),
+    )
+
+    response, status = streaming_worker.handle_scheduled_run({}, now=_NOW)
+
+    assert status == 500
+    assert response["reason"] == "internal error"
+    runs_writes = []
+    for query, job_config in zip(fake_bq.queries, fake_bq.job_configs):
+      if "_streaming_eval_runs" in query:
+        runs_writes.append(
+            {param.name: param.value for param in job_config.query_parameters}
+        )
+
+    assert [write["status"] for write in runs_writes] == ["success", "failed"]
+    assert runs_writes[-1]["error_message"] == "transient failure"
+
+  def test_missing_dml_stats_are_treated_as_processed(
+      self,
+      streaming_worker,
+      monkeypatch,
+      caplog,
+  ):
+    fake_bq = _FakeBigQueryClient(
+        trigger_rows=[
+            {
+                "session_id": "sess-1",
+                "trace_id": "trace-1",
+                "span_id": "span-1",
+                "event_type": "AGENT_COMPLETED",
+                "status": "OK",
+                "error_message": None,
+                "trigger_timestamp": _NOW,
+                "trigger_kind": "session_terminal",
+            }
+        ],
+        merge_affected_rows=[None],
+    )
+    client = MagicMock()
+    client.project_id = "proj"
+    client.dataset_id = "agent_trace"
+    client.table_id = "agent_events"
+    client.bq_client = fake_bq
+    client.evaluate.return_value = _report()
+    monkeypatch.setattr(
+        streaming_worker,
+        "build_client_from_context",
+        MagicMock(return_value=client),
+    )
+
+    response, status = streaming_worker.handle_scheduled_run({}, now=_NOW)
+
+    assert status == 200
+    assert response["processed_rows"] == 1
+    assert response["duplicate_rows"] == 0
+    assert any(
+        "BigQuery DML stats were unavailable" in message
+        for message in caplog.messages
+    )
 
   def test_same_session_can_emit_error_and_terminal_rows(
       self,
@@ -660,6 +751,25 @@ class TestWorker:
     assert [row["trigger_kind"] for row in persisted] == [
         "error_event",
         "session_terminal",
+    ]
+
+  def test_invalid_overlap_env_uses_default(
+      self,
+      streaming_worker,
+      monkeypatch,
+      caplog,
+  ):
+    client = MagicMock()
+    client.project_id = "proj"
+    client.dataset_id = "agent_trace"
+    client.table_id = "agent_events"
+    monkeypatch.setenv("BQ_AGENT_OVERLAP_MINUTES", "fifteen")
+
+    config = streaming_worker.load_runtime_config(client)
+
+    assert config.overlap == timedelta(minutes=15)
+    assert caplog.messages == [
+        "Invalid integer value for BQ_AGENT_OVERLAP_MINUTES='fifteen'; using default 15"
     ]
 
 
@@ -727,9 +837,49 @@ class TestDeployAssets:
     assert "cloudscheduler.googleapis.com" in setup_sh
     assert "roles/iam.serviceAccountOpenIdTokenCreator" in setup_sh
     assert "--timeout 300" in setup_sh
+    assert "trap 'rm -rf \"$staging\"' RETURN" in setup_sh
     assert "Cloud Scheduler" in readme
     assert "No special BigQuery reservation is required" in readme
     assert "enable the required Cloud Run" in readme
     assert "BigQuery tables were preserved intentionally" in setup_sh
     assert "intentionally preserves the BigQuery tables" in readme
     assert "pyyaml>=6.0" in requirements
+    assert "google-adk" not in requirements
+    assert setup_sh.index(
+        'ensure_scheduler_job "$scheduler_sa_email" "$url"'
+    ) < (setup_sh.index('write_state "$bq_location" "$scheduler_sa_email"'))
+
+  def test_streaming_worker_import_does_not_require_google_adk(self):
+    script = f"""
+import builtins
+import importlib.util
+import pathlib
+import sys
+
+root = pathlib.Path({str(_ROOT)!r})
+orig_import = builtins.__import__
+
+def blocked(name, globals=None, locals=None, fromlist=(), level=0):
+  if name == "google.adk" or name.startswith("google.adk."):
+    raise ImportError("blocked google.adk")
+  return orig_import(name, globals, locals, fromlist, level)
+
+builtins.__import__ = blocked
+sys.path.insert(0, str(root / "src"))
+spec = importlib.util.spec_from_file_location(
+    "streaming_worker_no_adk",
+    root / "deploy/streaming_evaluation/worker.py",
+)
+module = importlib.util.module_from_spec(spec)
+sys.modules["streaming_worker_no_adk"] = module
+spec.loader.exec_module(module)
+print("ok")
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        cwd=_ROOT,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
