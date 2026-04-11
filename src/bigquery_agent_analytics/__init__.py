@@ -1,0 +1,476 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""BigQuery Agent Analytics SDK.
+
+This package provides the consumption-layer SDK for analyzing agent traces
+stored in BigQuery, including:
+
+1. **SDK Client** - High-level Python interface abstracting BigQuery SQL.
+2. **Trace Reconstruction** - Retrieve and visualize agent conversation DAGs.
+3. **Evaluation Engine** - Code-based and LLM-as-judge evaluation at scale.
+4. **Feedback & Curation** - Drift detection and question distribution analysis.
+5. **Agent Insights** - Multi-stage pipeline for comprehensive session analysis.
+6. **Trace-Based Evaluation Harness** - Trajectory metrics and replay.
+7. **Long-Horizon Agent Memory** - Cross-session context and semantic search.
+8. **BigQuery AI/ML Integration** - AI.GENERATE, AI.EMBED,
+   AI.DETECT_ANOMALIES, AI.FORECAST, with legacy ML.* fallbacks.
+
+Quick start::
+
+    from bigquery_agent_analytics import Client
+
+    client = Client(project_id="my-project", dataset_id="analytics")
+    trace = client.get_trace("trace-123")
+    trace.render()
+
+    # Generate insights report
+    report = client.insights(max_sessions=50)
+    print(report.summary())
+"""
+
+import logging
+
+logger = logging.getLogger("bigquery_agent_analytics." + __name__)
+
+__all__ = []
+
+# --- SDK Client & Core ---
+try:
+  from .client import Client
+  from .evaluators import CodeEvaluator
+  from .evaluators import EvaluationReport
+  from .evaluators import LLMAsJudge
+  from .evaluators import SessionScore
+  from .feedback import AnalysisConfig
+  from .feedback import DriftReport
+  from .feedback import QuestionDistribution
+  from .formatter import format_output
+  from .insights import InsightsConfig
+  from .insights import InsightsReport
+  from .insights import SessionFacet
+  from .serialization import serialize
+  from .trace import ContentPart
+  from .trace import EventType
+  from .trace import ObjectRef
+  from .trace import Span
+  from .trace import Trace
+  from .trace import TraceFilter
+  from .views import ViewManager
+
+  __all__.extend(
+      [
+          "Client",
+          "Trace",
+          "Span",
+          "ContentPart",
+          "EventType",
+          "ObjectRef",
+          "TraceFilter",
+          "ViewManager",
+          "CodeEvaluator",
+          "LLMAsJudge",
+          "EvaluationReport",
+          "SessionScore",
+          "DriftReport",
+          "QuestionDistribution",
+          "AnalysisConfig",
+          "format_output",
+          "InsightsReport",
+          "InsightsConfig",
+          "serialize",
+          "SessionFacet",
+      ]
+  )
+except ImportError as e:
+  logger.debug(
+      "Could not import SDK client components: %s. "
+      "Ensure required dependencies are installed.",
+      e,
+  )
+
+# Trace Evaluator
+try:
+  from .trace_evaluator import BigQueryTraceEvaluator
+  from .trace_evaluator import EvaluationResult
+  from .trace_evaluator import TraceReplayRunner
+  from .trace_evaluator import TrajectoryMetrics
+
+  __all__.extend(
+      [
+          "BigQueryTraceEvaluator",
+          "EvaluationResult",
+          "TraceReplayRunner",
+          "TrajectoryMetrics",
+      ]
+  )
+except ImportError as e:
+  logger.debug(
+      "Could not import trace evaluator components: %s. "
+      "Ensure required dependencies are installed.",
+      e,
+  )
+
+# Memory Service
+try:
+  from .memory_service import BigQueryMemoryService
+  from .memory_service import BigQuerySessionMemory
+  from .memory_service import ContextManager
+  from .memory_service import Episode
+  from .memory_service import UserProfileBuilder
+
+  __all__.extend(
+      [
+          "BigQueryMemoryService",
+          "BigQuerySessionMemory",
+          "ContextManager",
+          "Episode",
+          "UserProfileBuilder",
+      ]
+  )
+except ImportError as e:
+  logger.debug(
+      "Could not import memory service components: %s. "
+      "Ensure required dependencies are installed.",
+      e,
+  )
+
+# AI/ML Integration
+try:
+  from .ai_ml_integration import AnomalyDetector
+  from .ai_ml_integration import BatchEvaluator
+  from .ai_ml_integration import BigQueryAIClient
+  from .ai_ml_integration import EmbeddingSearchClient
+  from .ai_ml_integration import LatencyForecast
+
+  __all__.extend(
+      [
+          "BigQueryAIClient",
+          "EmbeddingSearchClient",
+          "AnomalyDetector",
+          "BatchEvaluator",
+          "LatencyForecast",
+      ]
+  )
+except ImportError as e:
+  logger.debug(
+      "Could not import AI/ML integration components: %s. "
+      "Ensure required dependencies are installed.",
+      e,
+  )
+
+# Multi-Trial
+try:
+  from .multi_trial import MultiTrialReport
+  from .multi_trial import TrialResult
+  from .multi_trial import TrialRunner
+
+  __all__.extend(
+      [
+          "TrialRunner",
+          "TrialResult",
+          "MultiTrialReport",
+      ]
+  )
+except ImportError as e:
+  logger.debug(
+      "Could not import multi-trial components: %s. "
+      "Ensure required dependencies are installed.",
+      e,
+  )
+
+# Grader Pipeline
+try:
+  from .grader_pipeline import AggregateVerdict
+  from .grader_pipeline import BinaryStrategy
+  from .grader_pipeline import GraderPipeline
+  from .grader_pipeline import GraderResult
+  from .grader_pipeline import MajorityStrategy
+  from .grader_pipeline import ScoringStrategy
+  from .grader_pipeline import WeightedStrategy
+
+  __all__.extend(
+      [
+          "AggregateVerdict",
+          "BinaryStrategy",
+          "GraderPipeline",
+          "GraderResult",
+          "MajorityStrategy",
+          "ScoringStrategy",
+          "WeightedStrategy",
+      ]
+  )
+except ImportError as e:
+  logger.debug(
+      "Could not import grader pipeline components: %s. "
+      "Ensure required dependencies are installed.",
+      e,
+  )
+
+# Eval Suite
+try:
+  from .eval_suite import EvalCategory
+  from .eval_suite import EvalSuite
+  from .eval_suite import EvalTaskDef
+  from .eval_suite import SuiteHealth
+
+  __all__.extend(
+      [
+          "EvalCategory",
+          "EvalSuite",
+          "EvalTaskDef",
+          "SuiteHealth",
+      ]
+  )
+except ImportError as e:
+  logger.debug(
+      "Could not import eval suite components: %s. "
+      "Ensure required dependencies are installed.",
+      e,
+  )
+
+# Eval Validator
+try:
+  from .eval_validator import EvalValidator
+  from .eval_validator import ValidationWarning
+
+  __all__.extend(
+      [
+          "EvalValidator",
+          "ValidationWarning",
+      ]
+  )
+except ImportError as e:
+  logger.debug(
+      "Could not import eval validator components: %s. "
+      "Ensure required dependencies are installed.",
+      e,
+  )
+
+# Event Semantics
+try:
+  from .event_semantics import ALL_KNOWN_EVENT_TYPES
+  from .event_semantics import ERROR_SQL_PREDICATE
+  from .event_semantics import EVENT_FAMILIES
+  from .event_semantics import extract_response_text
+  from .event_semantics import is_error_event
+  from .event_semantics import is_hitl_event
+  from .event_semantics import is_tool_event
+  from .event_semantics import RESPONSE_EVENT_TYPES
+  from .event_semantics import tool_outcome
+
+  __all__.extend(
+      [
+          "is_error_event",
+          "extract_response_text",
+          "is_tool_event",
+          "tool_outcome",
+          "is_hitl_event",
+          "ERROR_SQL_PREDICATE",
+          "RESPONSE_EVENT_TYPES",
+          "EVENT_FAMILIES",
+          "ALL_KNOWN_EVENT_TYPES",
+      ]
+  )
+except ImportError as e:
+  logger.debug(
+      "Could not import event semantics: %s.",
+      e,
+  )
+
+# Context Graph
+try:
+  from .context_graph import BizNode
+  from .context_graph import Candidate
+  from .context_graph import ContextGraphConfig
+  from .context_graph import ContextGraphManager
+  from .context_graph import DecisionPoint
+  from .context_graph import WorldChangeAlert
+  from .context_graph import WorldChangeReport
+
+  __all__.extend(
+      [
+          "BizNode",
+          "Candidate",
+          "ContextGraphConfig",
+          "ContextGraphManager",
+          "DecisionPoint",
+          "WorldChangeAlert",
+          "WorldChangeReport",
+      ]
+  )
+except ImportError as e:
+  logger.debug(
+      "Could not import context graph components: %s.",
+      e,
+  )
+
+# Categorical Evaluator
+try:
+  from .categorical_evaluator import CategoricalEvaluationConfig
+  from .categorical_evaluator import CategoricalEvaluationReport
+  from .categorical_evaluator import CategoricalMetricCategory
+  from .categorical_evaluator import CategoricalMetricDefinition
+  from .categorical_evaluator import CategoricalMetricResult
+  from .categorical_evaluator import CategoricalSessionResult
+
+  __all__.extend(
+      [
+          "CategoricalEvaluationConfig",
+          "CategoricalEvaluationReport",
+          "CategoricalMetricCategory",
+          "CategoricalMetricDefinition",
+          "CategoricalMetricResult",
+          "CategoricalSessionResult",
+      ]
+  )
+except ImportError as e:
+  logger.debug(
+      "Could not import categorical evaluator components: %s.",
+      e,
+  )
+
+# Categorical Views
+try:
+  from .categorical_views import CategoricalViewManager
+
+  __all__.append("CategoricalViewManager")
+except ImportError as e:
+  logger.debug(
+      "Could not import categorical views: %s.",
+      e,
+  )
+
+# Ontology Models
+try:
+  from .ontology_models import BindingSpec
+  from .ontology_models import EntitySpec
+  from .ontology_models import ExtractedEdge
+  from .ontology_models import ExtractedGraph
+  from .ontology_models import ExtractedNode
+  from .ontology_models import ExtractedProperty
+  from .ontology_models import GraphSpec
+  from .ontology_models import KeySpec
+  from .ontology_models import load_graph_spec
+  from .ontology_models import load_graph_spec_from_string
+  from .ontology_models import PropertySpec
+  from .ontology_models import RelationshipSpec
+
+  __all__.extend(
+      [
+          "BindingSpec",
+          "EntitySpec",
+          "ExtractedEdge",
+          "ExtractedGraph",
+          "ExtractedNode",
+          "ExtractedProperty",
+          "GraphSpec",
+          "KeySpec",
+          "load_graph_spec",
+          "load_graph_spec_from_string",
+          "PropertySpec",
+          "RelationshipSpec",
+      ]
+  )
+except ImportError as e:
+  logger.debug(
+      "Could not import ontology model components: %s. "
+      "Ensure pyyaml is installed.",
+      e,
+  )
+
+# Ontology Schema Compiler
+try:
+  from .ontology_schema_compiler import compile_extraction_prompt
+  from .ontology_schema_compiler import compile_output_schema
+
+  __all__.extend(
+      [
+          "compile_extraction_prompt",
+          "compile_output_schema",
+      ]
+  )
+except ImportError as e:
+  logger.debug(
+      "Could not import ontology schema compiler: %s.",
+      e,
+  )
+
+# Ontology Graph Manager
+try:
+  from .ontology_graph import OntologyGraphManager
+
+  __all__.append("OntologyGraphManager")
+except ImportError as e:
+  logger.debug(
+      "Could not import ontology graph manager: %s.",
+      e,
+  )
+
+# Ontology Materializer
+try:
+  from .ontology_materializer import OntologyMaterializer
+
+  __all__.append("OntologyMaterializer")
+except ImportError as e:
+  logger.debug(
+      "Could not import ontology materializer: %s.",
+      e,
+  )
+
+# Ontology Property Graph Compiler
+try:
+  from .ontology_property_graph import compile_property_graph_ddl
+  from .ontology_property_graph import OntologyPropertyGraphCompiler
+
+  __all__.extend(
+      [
+          "OntologyPropertyGraphCompiler",
+          "compile_property_graph_ddl",
+      ]
+  )
+except ImportError as e:
+  logger.debug(
+      "Could not import ontology property graph compiler: %s.",
+      e,
+  )
+
+# Ontology Orchestrator
+try:
+  from .ontology_orchestrator import build_ontology_graph
+  from .ontology_orchestrator import compile_showcase_gql
+
+  __all__.extend(
+      [
+          "build_ontology_graph",
+          "compile_showcase_gql",
+      ]
+  )
+except ImportError as e:
+  logger.debug(
+      "Could not import ontology orchestrator: %s.",
+      e,
+  )
+
+# BigFrames Evaluator (optional bigframes dependency)
+try:
+  from .bigframes_evaluator import BigFramesEvaluator
+
+  __all__.append("BigFramesEvaluator")
+except ImportError as e:
+  logger.debug(
+      "Could not import BigFramesEvaluator: %s. "
+      "Install bigframes to use this feature.",
+      e,
+  )
