@@ -7,7 +7,7 @@
 An open-source Python SDK for analyzing, evaluating, and curating agent traces
 stored in BigQuery. Built on top of the
 [BigQuery Agent Analytics](https://adk.dev/integrations/bigquery-agent-analytics/), it provides
-a consumption-layer toolkit for agent observability, analysis, evaluation, and advanced capbilities like context graph at scale.
+a consumption-layer toolkit for agent observability, analysis, evaluation, and advanced capabilities like context graph at scale.
 
 ## Overview
 
