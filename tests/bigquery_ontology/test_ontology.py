@@ -32,7 +32,7 @@ import textwrap
 
 import pytest
 
-from ontology import load_ontology_from_string
+from bigquery_ontology import load_ontology_from_string
 
 
 def _load(yaml_text: str):

@@ -29,7 +29,7 @@ import textwrap
 
 from typer.testing import CliRunner
 
-from ontology.cli import app
+from bigquery_ontology.cli import app
 
 # NOTE: Click's CliRunner merges stderr into ``result.output`` by default
 # (``mix_stderr=True``). The CLI writes errors to stderr, so all

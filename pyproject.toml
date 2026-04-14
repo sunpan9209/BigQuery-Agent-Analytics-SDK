@@ -52,10 +52,10 @@ all = [
 
 [project.scripts]
 bq-agent-sdk = "bigquery_agent_analytics.cli:main"
-gm = "ontology.cli:main"
+gm = "bigquery_ontology.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/bigquery_agent_analytics", "src/ontology"]
+packages = ["src/bigquery_agent_analytics", "src/bigquery_ontology"]
 
 [tool.pyink]
 line-length = 80
