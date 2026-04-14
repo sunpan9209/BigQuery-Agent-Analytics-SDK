@@ -29,6 +29,7 @@ from .binding_models import PropertyBinding
 from .binding_models import RelationshipBinding
 from .graph_ddl_compiler import compile_graph
 from .ontology_loader import load_ontology
+from .scaffold import scaffold
 from .ontology_loader import load_ontology_from_string
 from .ontology_models import Cardinality
 from .ontology_models import Entity
@@ -57,4 +58,5 @@ __all__ = [
     "load_binding_from_string",
     "load_ontology",
     "load_ontology_from_string",
+    "scaffold",
 ]
