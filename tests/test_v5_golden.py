@@ -783,12 +783,15 @@ class TestLineageGQL:
         dataset_id="ds",
         relationship_name="sup_YahooAdUnitEvolvedFrom",
     )
-    assert "prior" in gql
-    assert "current" in gql
+    assert "prev" in gql
+    assert "cur" in gql
+    # Aliases must not use BigQuery GQL reserved keywords.
+    assert "(current:" not in gql
+    assert "(prior:" not in gql
     assert "sup_YahooAdUnit" in gql
     assert "sup_YahooAdUnitEvolvedFrom" in gql
-    assert "prior_adUnitId" in gql or "prior.adUnitId" in gql
-    assert "current_adUnitName" in gql or "current.adUnitName" in gql
+    assert "prev_adUnitId" in gql or "prev.adUnitId" in gql
+    assert "cur_adUnitName" in gql or "cur.adUnitName" in gql
     assert "event_time" in gql
     assert "ORDER BY" in gql
 
