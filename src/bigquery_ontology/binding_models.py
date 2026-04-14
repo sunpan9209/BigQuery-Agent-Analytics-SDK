@@ -99,12 +99,7 @@ class EntityBinding(BaseModel):
 
   name: str
   source: str
-  # An empty list is accepted so this shape model stays ontology-free;
-  # whether an empty list is *correct* depends on how many non-derived
-  # properties the bound entity declares, which only the loader can
-  # answer. A strict non-empty check here would false-positive on
-  # entities that legitimately have no non-derived properties.
-  properties: list[PropertyBinding] = Field(default_factory=list)
+  properties: list[PropertyBinding]
 
 
 class RelationshipBinding(BaseModel):

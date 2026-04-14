@@ -240,7 +240,8 @@ def test_entity_with_empty_properties_round_trips():
       "entities": [
         {
           "name": "E",
-          "source": "t"
+          "source": "t",
+          "properties": []
         }
       ]
     }"""
@@ -258,6 +259,18 @@ def _assert_validation_error(yaml_text: str, must_contain: str) -> None:
   with pytest.raises(ValidationError) as exc_info:
     _load(yaml_text)
   assert must_contain in str(exc_info.value)
+
+
+def test_entity_missing_properties_is_error():
+  yaml_input = """
+    binding: b
+    ontology: x
+    target: {backend: bigquery, project: p, dataset: d}
+    entities:
+      - name: E
+        source: t
+  """
+  _assert_validation_error(yaml_input, "properties")
 
 
 def test_missing_top_level_binding_is_error():
