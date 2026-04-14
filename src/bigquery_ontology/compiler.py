@@ -350,6 +350,30 @@ def _resolve_properties(
   return tuple(out)
 
 
+_IDENTIFIER_RE = re.compile(r"\b([a-zA-Z_]\w*)\b")
+
+
+def _reject_unresolved_names(
+    expr: str,
+    self_name: str,
+    property_map: dict[str, Property],
+    owner: str,
+) -> None:
+  """Raise if ``expr`` contains identifiers not in the property map."""
+  unknown = {
+      tok
+      for tok in _IDENTIFIER_RE.findall(expr)
+      if tok != self_name and tok not in property_map
+  }
+  if unknown:
+    names = ", ".join(sorted(unknown))
+    raise ValueError(
+        f"Derived property {self_name!r} on {owner} references "
+        f"unknown name(s): {names}. Every name in a derived "
+        f"expression must be a property on the same element."
+    )
+
+
 def _resolve_sql(
     prop: Property,
     *,
@@ -385,37 +409,41 @@ def _resolve_sql(
 
   resolving.add(prop.name)
   try:
-    # Walk the expression once per declared property name. Longer
-    # names first so a property called ``full_name`` isn't shadowed
-    # by a substitution of ``name`` that would otherwise clip its
-    # leading ``full_``. Word-boundary anchors prevent substring
-    # matches inside bigger identifiers.
-    substituted = prop.expr
-    for name in sorted(property_map.keys(), key=len, reverse=True):
-      if name == prop.name:
-        # Self-reference in an expr would already have been a cycle
-        # via the ``resolving`` set, but skip it explicitly so the
-        # check below doesn't even look.
-        continue
-      pattern = rf"\b{re.escape(name)}\b"
-      if not re.search(pattern, substituted):
-        continue
-      nested = _resolve_sql(
-          property_map[name],
-          property_map=property_map,
-          column_by_property=column_by_property,
-          resolved_sql=resolved_sql,
-          resolving=resolving,
-          owner=owner,
+    _reject_unresolved_names(prop.expr, prop.name, property_map, owner)
+
+    # Build a single alternation pattern for all property names that
+    # appear in the expression, then substitute in one pass so that
+    # a column name introduced by one replacement can never be
+    # re-matched as a different property name.
+    names_in_expr = [
+        name
+        for name in sorted(property_map.keys(), key=len, reverse=True)
+        if name != prop.name
+        and re.search(rf"\b{re.escape(name)}\b", prop.expr)
+    ]
+
+    if names_in_expr:
+      combined = re.compile(
+          "|".join(rf"\b{re.escape(n)}\b" for n in names_in_expr)
       )
-      # If the nested result is itself a derived expression, wrap it
-      # in parentheses before splicing so operator precedence in the
-      # outer expression stays correct regardless of what the user
-      # wrote. Column names don't need this.
-      if property_map[name].expr is not None:
-        nested = f"({nested})"
-      substituted = re.sub(pattern, nested, substituted)
-    result = substituted
+
+      def _replacer(match: re.Match[str]) -> str:
+        name = match.group(0)
+        nested = _resolve_sql(
+            property_map[name],
+            property_map=property_map,
+            column_by_property=column_by_property,
+            resolved_sql=resolved_sql,
+            resolving=resolving,
+            owner=owner,
+        )
+        if property_map[name].expr is not None:
+          nested = f"({nested})"
+        return nested
+
+      result = combined.sub(_replacer, prop.expr)
+    else:
+      result = prop.expr
   finally:
     resolving.discard(prop.name)
 

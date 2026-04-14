@@ -567,6 +567,69 @@ def test_derived_property_cycle_is_rejected():
     compile_graph(ontology, binding)
 
 
+def test_substitution_does_not_rematch_inserted_column_names():
+  # Regression: properties ``a`` (bound to column ``x``) and ``x``
+  # (bound to column ``y``), with derived ``d: expr: "a"``. A
+  # sequential substitution loop would replace ``a`` → ``x``, then
+  # the ``x`` pass would fire on the inserted column name, producing
+  # ``(y) AS d`` instead of the correct ``(x) AS d``. Single-pass
+  # substitution prevents this.
+  ontology_yaml = """
+    ontology: o
+    entities:
+      - name: E
+        keys: {primary: [id]}
+        properties:
+          - {name: id, type: string}
+          - {name: a, type: string}
+          - {name: x, type: string}
+          - {name: d, type: string, expr: "a"}
+  """
+  binding_yaml = """
+    binding: b
+    ontology: o
+    target: {backend: bigquery, project: p, dataset: d}
+    entities:
+      - name: E
+        source: t
+        properties:
+          - {name: id, column: row_id}
+          - {name: a, column: x}
+          - {name: x, column: y}
+  """
+  ddl = compile_graph(*_load(ontology_yaml, binding_yaml))
+  assert "(x) AS d" in ddl
+  assert "(y) AS d" not in ddl
+
+
+def test_unresolved_name_in_derived_expression_is_rejected():
+  # A derived expression referencing a name that doesn't exist as a
+  # property on the same element must fail at compile time rather
+  # than leaking an unsubstituted token into emitted DDL.
+  ontology_yaml = """
+    ontology: o
+    entities:
+      - name: E
+        keys: {primary: [id]}
+        properties:
+          - {name: id, type: string}
+          - {name: d, type: string, expr: "missing_prop || id"}
+  """
+  binding_yaml = """
+    binding: b
+    ontology: o
+    target: {backend: bigquery, project: p, dataset: d}
+    entities:
+      - name: E
+        source: t
+        properties:
+          - {name: id, column: row_id}
+  """
+  ontology, binding = _load(ontology_yaml, binding_yaml)
+  with pytest.raises(ValueError, match="missing_prop"):
+    compile_graph(ontology, binding)
+
+
 def test_entities_sharing_a_source_basename_compile_cleanly():
   # Regression guard for the aliasing approach. Two entities binding
   # to tables whose basenames happen to collide (``customers.users``
