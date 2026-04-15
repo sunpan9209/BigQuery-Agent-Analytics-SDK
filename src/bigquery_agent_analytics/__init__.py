@@ -498,6 +498,8 @@ except ImportError as e:
 
 # V5: TTL Importer
 try:
+  from .ttl_importer import import_owl_to_graph_spec
+  from .ttl_importer import import_owl_to_ontology
   from .ttl_importer import ttl_import
   from .ttl_importer import ttl_resolve
   from .ttl_importer import TTLImportResult
@@ -505,6 +507,8 @@ try:
   __all__.extend(
       [
           "TTLImportResult",
+          "import_owl_to_graph_spec",
+          "import_owl_to_ontology",
           "ttl_import",
           "ttl_resolve",
       ]

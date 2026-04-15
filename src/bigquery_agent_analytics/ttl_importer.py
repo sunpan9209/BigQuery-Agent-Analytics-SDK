@@ -772,3 +772,131 @@ def _find_fill_in_locations(
   elif data == _FILL_IN:
     results.append(prefix)
   return results
+
+
+# ------------------------------------------------------------------ #
+# Upstream OWL importer bridge                                         #
+# ------------------------------------------------------------------ #
+
+
+def import_owl_to_ontology(
+    sources: list[str],
+    include_namespaces: list[str],
+    ontology_name: Optional[str] = None,
+) -> tuple[str, str]:
+  """Import OWL sources via the upstream ``bigquery_ontology`` importer.
+
+  This produces a ``*.ontology.yaml`` (not a combined GraphSpec YAML).
+  The output can be loaded with ``load_ontology_from_string()`` once
+  FILL_IN placeholders are resolved, then combined with a binding via
+  ``load_from_ontology_binding()`` to produce a GraphSpec.
+
+  For the legacy two-phase flow that produces GraphSpec directly, use
+  ``ttl_import()`` + ``ttl_resolve()`` instead.
+
+  Args:
+      sources: Paths to OWL source files (Turtle or RDF/XML).
+      include_namespaces: IRI prefixes to include.
+      ontology_name: Name for the output ontology. If ``None``,
+          derived from the first namespace.
+
+  Returns:
+      A ``(ontology_yaml, drop_summary)`` tuple. The YAML is a valid
+      ``*.ontology.yaml`` (modulo FILL_IN placeholders). The drop
+      summary is a human-readable report of excluded OWL features.
+
+  Raises:
+      ImportError: If ``bigquery_ontology`` or ``rdflib`` is not
+          installed.
+      ValueError: If no sources or no namespaces are provided.
+  """
+  from bigquery_ontology.owl_importer import import_owl
+
+  return import_owl(
+      sources=sources,
+      include_namespaces=include_namespaces,
+      ontology_name=ontology_name,
+  )
+
+
+def import_owl_to_graph_spec(
+    sources: list[str],
+    include_namespaces: list[str],
+    project_id: str,
+    dataset_id: str,
+    ontology_name: Optional[str] = None,
+    lineage_config: Optional[dict] = None,
+) -> tuple['GraphSpec', str]:
+  """Import OWL sources and produce an SDK GraphSpec.
+
+  End-to-end bridge: parses OWL via the upstream importer, scaffolds
+  a binding, and converts to a ``GraphSpec`` via the runtime adapter.
+
+  The output GraphSpec is runtime-ready only if the upstream output
+  has no FILL_IN placeholders. If placeholders remain, this function
+  raises ``ValueError`` with a message listing the unresolved sites.
+
+  Args:
+      sources: Paths to OWL source files.
+      include_namespaces: IRI prefixes to include.
+      project_id: BigQuery project for the scaffolded binding.
+      dataset_id: BigQuery dataset for the scaffolded binding.
+      ontology_name: Name for the output ontology.
+      lineage_config: Optional lineage configuration for the adapter.
+
+  Returns:
+      A ``(GraphSpec, drop_summary)`` tuple.
+
+  Raises:
+      ImportError: If required packages are not installed.
+      ValueError: If FILL_IN placeholders remain or conversion fails.
+  """
+  from bigquery_ontology import load_ontology_from_string
+  from bigquery_ontology import scaffold
+
+  from .runtime_spec import graph_spec_from_ontology_binding
+
+  ontology_yaml, drop_summary = import_owl_to_ontology(
+      sources=sources,
+      include_namespaces=include_namespaces,
+      ontology_name=ontology_name,
+  )
+
+  # Check for FILL_IN before attempting to load.
+  if _FILL_IN in ontology_yaml:
+    # Count and list placeholder locations.
+    fill_in_lines = [
+        f'  line {i + 1}: {line.strip()}'
+        for i, line in enumerate(ontology_yaml.splitlines())
+        if _FILL_IN in line
+    ]
+    raise ValueError(
+        f'Upstream OWL import produced {len(fill_in_lines)} unresolved '
+        f'FILL_IN placeholder(s). Resolve them in the ontology YAML '
+        f'before converting to GraphSpec:\n' + '\n'.join(fill_in_lines)
+    )
+
+  ontology = load_ontology_from_string(ontology_yaml)
+
+  # Scaffold a binding from the ontology.
+  ddl_text, binding_yaml = scaffold(
+      ontology=ontology,
+      project=project_id,
+      dataset=dataset_id,
+  )
+
+  from bigquery_ontology import load_binding_from_string
+
+  binding = load_binding_from_string(binding_yaml, ontology=ontology)
+
+  spec = graph_spec_from_ontology_binding(
+      ontology, binding, lineage_config=lineage_config
+  )
+
+  from .ontology_models import _resolve_inheritance
+  from .ontology_models import _validate_graph_spec
+
+  _resolve_inheritance(spec)
+  _validate_graph_spec(spec)
+
+  return spec, drop_summary
