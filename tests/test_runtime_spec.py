@@ -52,7 +52,7 @@ class TestGraphSpecToOntologyBinding:
 
   def test_round_trip_preserves_entity_names(self):
     spec = load_graph_spec(_DEMO_SPEC_PATH, env="p.d")
-    ontology, binding = graph_spec_to_ontology_binding(
+    ontology, binding, _ = graph_spec_to_ontology_binding(
         spec, project_id="p", dataset_id="d"
     )
     ont_entity_names = {e.name for e in ontology.entities}
@@ -61,7 +61,7 @@ class TestGraphSpecToOntologyBinding:
 
   def test_round_trip_preserves_relationship_names(self):
     spec = load_graph_spec(_DEMO_SPEC_PATH, env="p.d")
-    ontology, binding = graph_spec_to_ontology_binding(
+    ontology, binding, _ = graph_spec_to_ontology_binding(
         spec, project_id="p", dataset_id="d"
     )
     ont_rel_names = {r.name for r in ontology.relationships}
@@ -70,7 +70,7 @@ class TestGraphSpecToOntologyBinding:
 
   def test_binding_has_all_entities(self):
     spec = load_graph_spec(_DEMO_SPEC_PATH, env="p.d")
-    _, binding = graph_spec_to_ontology_binding(
+    _, binding, _ = graph_spec_to_ontology_binding(
         spec, project_id="p", dataset_id="d"
     )
     binding_entity_names = {eb.name for eb in binding.entities}
@@ -79,7 +79,7 @@ class TestGraphSpecToOntologyBinding:
 
   def test_binding_target(self):
     spec = load_graph_spec(_DEMO_SPEC_PATH, env="p.d")
-    _, binding = graph_spec_to_ontology_binding(
+    _, binding, _ = graph_spec_to_ontology_binding(
         spec, project_id="my-proj", dataset_id="my-ds"
     )
     assert binding.target.project == "my-proj"
@@ -87,7 +87,7 @@ class TestGraphSpecToOntologyBinding:
 
   def test_property_types_mapped(self):
     spec = load_graph_spec(_DEMO_SPEC_PATH, env="p.d")
-    ontology, _ = graph_spec_to_ontology_binding(
+    ontology, _, _ = graph_spec_to_ontology_binding(
         spec, project_id="p", dataset_id="d"
     )
     # All properties should have valid PropertyType values.
@@ -169,8 +169,9 @@ class TestOntologyBindingToGraphSpec:
     binding = self._make_simple_binding()
     spec = graph_spec_from_ontology_binding(ontology, binding)
     prop_types = {p.name: p.type for p in spec.entities[0].properties}
-    assert prop_types["cid"] == "string"
-    assert prop_types["name"] == "string"
+    # Binding maps cid->customer_id, name->display_name.
+    assert prop_types["customer_id"] == "string"
+    assert prop_types["display_name"] == "string"
 
   def test_lineage_config_applied(self):
     ontology = Ontology(
@@ -258,7 +259,7 @@ class TestRoundTrip:
 
   def test_round_trip_entity_properties(self):
     spec = load_graph_spec(_DEMO_SPEC_PATH, env="p.d")
-    ontology, binding = graph_spec_to_ontology_binding(
+    ontology, binding, _ = graph_spec_to_ontology_binding(
         spec, project_id="p", dataset_id="d"
     )
     roundtrip = graph_spec_from_ontology_binding(ontology, binding)
@@ -269,7 +270,7 @@ class TestRoundTrip:
 
   def test_round_trip_relationship_endpoints(self):
     spec = load_graph_spec(_DEMO_SPEC_PATH, env="p.d")
-    ontology, binding = graph_spec_to_ontology_binding(
+    ontology, binding, _ = graph_spec_to_ontology_binding(
         spec, project_id="p", dataset_id="d"
     )
     roundtrip = graph_spec_from_ontology_binding(ontology, binding)
@@ -279,7 +280,7 @@ class TestRoundTrip:
 
   def test_round_trip_keys(self):
     spec = load_graph_spec(_DEMO_SPEC_PATH, env="p.d")
-    ontology, binding = graph_spec_to_ontology_binding(
+    ontology, binding, _ = graph_spec_to_ontology_binding(
         spec, project_id="p", dataset_id="d"
     )
     roundtrip = graph_spec_from_ontology_binding(ontology, binding)
@@ -357,9 +358,187 @@ class TestRoundTrip:
     from bigquery_ontology import compile_graph
 
     spec = load_graph_spec(_DEMO_SPEC_PATH, env="p.d")
-    ontology, binding = graph_spec_to_ontology_binding(
+    ontology, binding, _ = graph_spec_to_ontology_binding(
         spec, project_id="p", dataset_id="d"
     )
     # YMGO has sup_YahooAdUnit extends mako_Candidate
     with pytest.raises(ValueError, match="extends"):
       compile_graph(ontology, binding)
+
+
+# ------------------------------------------------------------------ #
+# Fix validation: column mapping, lineage round-trip, derived expr     #
+# ------------------------------------------------------------------ #
+
+
+class TestColumnMappingPreserved:
+  """Forward adapter uses binding column names, not property names."""
+
+  def test_renamed_columns_used_in_graph_spec(self):
+    """When binding maps name->display_name, GraphSpec uses display_name."""
+    ontology = Ontology(
+        ontology="test",
+        entities=[
+            Entity(
+                name="Person",
+                keys=Keys(primary=["pid"]),
+                properties=[
+                    Property(name="pid", type=PropertyType.STRING),
+                    Property(name="name", type=PropertyType.STRING),
+                ],
+            ),
+        ],
+        relationships=[],
+    )
+    binding = Binding(
+        binding="test_binding",
+        ontology="test",
+        target=BigQueryTarget(backend="bigquery", project="p", dataset="d"),
+        entities=[
+            EntityBinding(
+                name="Person",
+                source="persons",
+                properties=[
+                    PropertyBinding(name="pid", column="person_id"),
+                    PropertyBinding(name="name", column="display_name"),
+                ],
+            ),
+        ],
+        relationships=[],
+    )
+    spec = graph_spec_from_ontology_binding(ontology, binding)
+    prop_names = {p.name for p in spec.entities[0].properties}
+    # Should use column names, not ontology property names.
+    assert "person_id" in prop_names
+    assert "display_name" in prop_names
+    assert "pid" not in prop_names
+    assert "name" not in prop_names
+
+
+class TestLineageRoundTrip:
+  """Reverse adapter preserves lineage session columns."""
+
+  def test_reverse_extracts_lineage_config(self):
+    """GraphSpec with session columns → lineage_config dict."""
+    from bigquery_agent_analytics.ontology_models import BindingSpec
+    from bigquery_agent_analytics.ontology_models import EntitySpec
+    from bigquery_agent_analytics.ontology_models import KeySpec
+    from bigquery_agent_analytics.ontology_models import PropertySpec
+    from bigquery_agent_analytics.ontology_models import RelationshipSpec
+
+    entity = EntitySpec(
+        name="A",
+        binding=BindingSpec(source="p.d.a_table"),
+        keys=KeySpec(primary=["a_id"]),
+        properties=[PropertySpec(name="a_id", type="string")],
+        labels=["A"],
+    )
+    rel = RelationshipSpec(
+        name="AEvolvedFrom",
+        from_entity="A",
+        to_entity="A",
+        binding=BindingSpec(
+            source="p.d.a_lineage",
+            from_columns=["a_id"],
+            to_columns=["a_id"],
+            from_session_column="from_sid",
+            to_session_column="to_sid",
+        ),
+        properties=[
+            PropertySpec(name="from_sid", type="string"),
+            PropertySpec(name="to_sid", type="string"),
+        ],
+    )
+    spec = GraphSpec(name="g", entities=[entity], relationships=[rel])
+
+    _, _, lineage_config = graph_spec_to_ontology_binding(
+        spec, project_id="p", dataset_id="d"
+    )
+    assert "AEvolvedFrom" in lineage_config
+    assert lineage_config["AEvolvedFrom"].from_session_column == "from_sid"
+    assert lineage_config["AEvolvedFrom"].to_session_column == "to_sid"
+
+  def test_full_lineage_round_trip(self):
+    """GraphSpec → Ontology+Binding+lineage → GraphSpec preserves lineage."""
+    from bigquery_agent_analytics.ontology_models import BindingSpec
+    from bigquery_agent_analytics.ontology_models import EntitySpec
+    from bigquery_agent_analytics.ontology_models import KeySpec
+    from bigquery_agent_analytics.ontology_models import PropertySpec
+    from bigquery_agent_analytics.ontology_models import RelationshipSpec
+
+    entity = EntitySpec(
+        name="A",
+        binding=BindingSpec(source="p.d.a_table"),
+        keys=KeySpec(primary=["a_id"]),
+        properties=[PropertySpec(name="a_id", type="string")],
+        labels=["A"],
+    )
+    rel = RelationshipSpec(
+        name="AEvolvedFrom",
+        from_entity="A",
+        to_entity="A",
+        binding=BindingSpec(
+            source="p.d.a_lineage",
+            from_columns=["a_id"],
+            to_columns=["a_id"],
+            from_session_column="from_sid",
+            to_session_column="to_sid",
+        ),
+        properties=[
+            PropertySpec(name="from_sid", type="string"),
+            PropertySpec(name="to_sid", type="string"),
+        ],
+    )
+    spec = GraphSpec(name="g", entities=[entity], relationships=[rel])
+
+    ontology, binding, lineage_config = graph_spec_to_ontology_binding(
+        spec, project_id="p", dataset_id="d"
+    )
+    roundtrip = graph_spec_from_ontology_binding(
+        ontology, binding, lineage_config
+    )
+    rt_rel = roundtrip.relationships[0]
+    assert rt_rel.binding.from_session_column == "from_sid"
+    assert rt_rel.binding.to_session_column == "to_sid"
+
+
+class TestDerivedPropertyRejection:
+  """Forward adapter rejects upstream derived properties."""
+
+  def test_expr_property_raises(self):
+    """Property with expr raises ValueError."""
+    ontology = Ontology(
+        ontology="test",
+        entities=[
+            Entity(
+                name="Person",
+                keys=Keys(primary=["pid"]),
+                properties=[
+                    Property(name="pid", type=PropertyType.STRING),
+                    Property(
+                        name="full_name",
+                        type=PropertyType.STRING,
+                        expr="first || ' ' || last",
+                    ),
+                ],
+            ),
+        ],
+        relationships=[],
+    )
+    binding = Binding(
+        binding="test_binding",
+        ontology="test",
+        target=BigQueryTarget(backend="bigquery", project="p", dataset="d"),
+        entities=[
+            EntityBinding(
+                name="Person",
+                source="persons",
+                properties=[
+                    PropertyBinding(name="pid", column="pid"),
+                ],
+            ),
+        ],
+        relationships=[],
+    )
+    with pytest.raises(ValueError, match="derived expression"):
+      graph_spec_from_ontology_binding(ontology, binding)

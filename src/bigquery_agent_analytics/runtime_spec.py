@@ -135,14 +135,42 @@ def _resolve_source(raw_source: str, target: BigQueryTarget) -> str:
   return f'{target.project}.{target.dataset}.{raw_source}'
 
 
-def _build_property_specs(properties: list[Property]) -> list[PropertySpec]:
-  """Convert upstream ``Property`` list to SDK ``PropertySpec`` list."""
+def _build_property_specs(
+    properties: list[Property],
+    binding_props: list[PropertyBinding] | None = None,
+) -> list[PropertySpec]:
+  """Convert upstream ``Property`` list to SDK ``PropertySpec`` list.
+
+  When ``binding_props`` is provided, the SDK property name is set to
+  the physical column name from the binding (not the ontology property
+  name). This is necessary because the SDK runtime uses
+  ``PropertySpec.name`` as the physical column name in DDL and
+  materialization.
+
+  Derived properties (those with ``expr``) are rejected because the
+  SDK runtime would treat them as stored columns.
+  """
+  # Build column mapping: ontology prop name -> physical column name.
+  col_map: dict[str, str] = {}
+  if binding_props:
+    for bp in binding_props:
+      col_map[bp.name] = bp.column
+
   specs: list[PropertySpec] = []
   for prop in properties:
+    if prop.expr is not None:
+      raise ValueError(
+          f'Property {prop.name!r} has a derived expression '
+          f'(expr={prop.expr!r}). The SDK runtime does not support '
+          f'derived properties; they would be treated as stored '
+          f'columns. Remove the expr or handle it before conversion.'
+      )
     sdk_type = _PROPERTY_TYPE_TO_SDK.get(prop.type, 'string')
+    # Use the binding column name if available; fall back to ontology name.
+    col_name = col_map.get(prop.name, prop.name)
     specs.append(
         PropertySpec(
-            name=prop.name,
+            name=col_name,
             type=sdk_type,
             description=prop.description or '',
         )
@@ -224,7 +252,9 @@ def graph_spec_from_ontology_binding(
                 to_columns=None,
             ),
             keys=_build_key_spec(ont_entity),
-            properties=_build_property_specs(ont_entity.properties),
+            properties=_build_property_specs(
+                ont_entity.properties, eb.properties
+            ),
             labels=labels,
         )
     )
@@ -260,7 +290,7 @@ def graph_spec_from_ontology_binding(
                 from_session_column=from_session_col,
                 to_session_column=to_session_col,
             ),
-            properties=_build_property_specs(ont_rel.properties),
+            properties=_build_property_specs(ont_rel.properties, rb.properties),
         )
     )
 
@@ -295,7 +325,7 @@ def graph_spec_to_ontology_binding(
     binding_name: str = 'converted_binding',
     project_id: str = '',
     dataset_id: str = '',
-) -> tuple[Ontology, Binding]:
+) -> tuple[Ontology, Binding, dict[str, LineageEdgeConfig]]:
   """Convert a GraphSpec back to separated Ontology + Binding.
 
   Useful for feeding existing GraphSpec YAML into upstream tools
@@ -305,6 +335,11 @@ def graph_spec_to_ontology_binding(
   (identity mapping). Fully-qualified source references
   (``project.dataset.table``) are preserved verbatim; shorter
   references are left as-is in the binding source field.
+
+  V5 lineage session columns (``from_session_column``,
+  ``to_session_column``) are extracted into a separate
+  ``LineageEdgeConfig`` dict keyed by relationship name, since the
+  upstream binding model does not have these fields.
 
   Args:
       spec: The SDK GraphSpec to convert.
@@ -317,7 +352,10 @@ def graph_spec_to_ontology_binding(
           the dataset is inferred similarly.
 
   Returns:
-      A ``(Ontology, Binding)`` tuple.
+      A ``(Ontology, Binding, lineage_config)`` tuple. The
+      ``lineage_config`` dict maps relationship names to
+      ``LineageEdgeConfig`` for any relationships that had
+      ``from_session_column`` / ``to_session_column`` set.
   """
   # -- Infer project/dataset from first entity source if not supplied --
   if (not project_id or not dataset_id) and spec.entities:
@@ -377,6 +415,7 @@ def graph_spec_to_ontology_binding(
   # -- Relationships ---------------------------------------------------
   ont_relationships: list[Relationship] = []
   bnd_relationships: list[RelationshipBinding] = []
+  lineage_config: dict[str, LineageEdgeConfig] = {}
 
   for rs in spec.relationships:
     ont_props = [
@@ -414,6 +453,13 @@ def graph_spec_to_ontology_binding(
         )
     )
 
+    # Preserve V5 lineage session columns as a sidecar config.
+    if rs.binding.from_session_column and rs.binding.to_session_column:
+      lineage_config[rs.name] = LineageEdgeConfig(
+          from_session_column=rs.binding.from_session_column,
+          to_session_column=rs.binding.to_session_column,
+      )
+
   # -- Assemble --------------------------------------------------------
   ontology = Ontology(
       ontology=ontology_name,
@@ -433,4 +479,4 @@ def graph_spec_to_ontology_binding(
       relationships=bnd_relationships,
   )
 
-  return ontology, binding_obj
+  return ontology, binding_obj, lineage_config
