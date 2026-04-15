@@ -100,6 +100,33 @@ class TestImportOwlToGraphSpec:
           dataset_id="d",
       )
 
+  def test_rejects_extends(self, tmp_path):
+    """Ontology with extends is rejected with a clear message."""
+    from bigquery_agent_analytics.ttl_importer import import_owl_to_graph_spec
+
+    # Write a TTL with extends but all keys present (no FILL_IN).
+    ttl = tmp_path / "extends.ttl"
+    ttl.write_text(
+        "@prefix : <https://example.com/test#> .\n"
+        "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n"
+        "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n"
+        "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n"
+        ":Parent a owl:Class ; owl:hasKey ( :pid ) .\n"
+        ":pid a owl:DatatypeProperty ; "
+        "  rdfs:domain :Parent ; rdfs:range xsd:string .\n"
+        ":Child a owl:Class ; rdfs:subClassOf :Parent .\n"
+        ":extra a owl:DatatypeProperty ; "
+        "  rdfs:domain :Child ; rdfs:range xsd:string .\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="flat ontology.*extends"):
+      import_owl_to_graph_spec(
+          sources=[str(ttl)],
+          include_namespaces=["https://example.com/test#"],
+          project_id="p",
+          dataset_id="d",
+      )
+
 
 class TestLegacyPathUnchanged:
   """Existing ttl_import/ttl_resolve still work."""

@@ -878,6 +878,25 @@ def import_owl_to_graph_spec(
 
   ontology = load_ontology_from_string(ontology_yaml)
 
+  # Reject ontologies with extends — upstream scaffold (v0) does not
+  # support inheritance. Fail here with a clear message rather than
+  # leaking a scaffold implementation error.
+  entities_with_extends = [e.name for e in ontology.entities if e.extends]
+  rels_with_extends = [r.name for r in ontology.relationships if r.extends]
+  if entities_with_extends or rels_with_extends:
+    parts = []
+    if entities_with_extends:
+      parts.append(f'entities: {entities_with_extends}')
+    if rels_with_extends:
+      parts.append(f'relationships: {rels_with_extends}')
+    raise ValueError(
+        'import_owl_to_graph_spec() requires a flat ontology (no '
+        'extends). The imported ontology uses extends on '
+        + '; '.join(parts)
+        + '. Use import_owl_to_ontology() instead and author the '
+        'binding manually.'
+    )
+
   # Scaffold a binding from the ontology.
   ddl_text, binding_yaml = scaffold(
       ontology=ontology,
