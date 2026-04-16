@@ -818,30 +818,46 @@ LLM_JUDGE_BATCH_QUERY = _LEGACY_LLM_JUDGE_BATCH_QUERY
 # ------------------------------------------------------------------ #
 
 
+def _strip_markdown_fences(text: str) -> str:
+  """Strip markdown code block fences (``\\`\\`\\`json ... \\`\\`\\```) if present.
+
+  Models frequently wrap JSON output in fenced code blocks. This helper
+  removes the opening ``\\`\\`\\`json`` (or plain ``\\`\\`\\```) and closing
+  ``\\`\\`\\``` markers so the result can be passed to ``json.loads()``.
+
+  The regex pattern matches the same fences handled server-side by
+  ``REGEXP_REPLACE`` in ``ontology_graph.py`` and ``context_graph.py``.
+  """
+  if not text:
+    return text
+  text = text.strip()
+  if not text.startswith("```"):
+    return text
+  import re
+  text = re.sub(r"^```(?:json|sql)?\s*\n?", "", text)
+  text = re.sub(r"\n?\s*```\s*$", "", text)
+  return text.strip()
+
+
 def _parse_json_from_text(text: str) -> Optional[dict[str, Any]]:
   """Extracts and parses JSON from LLM response text."""
   if not text:
     return None
 
-  # Try markdown code block
-  if "```json" in text:
-    parts = text.split("```json")
-    if len(parts) > 1:
-      json_part = parts[1]
-      if "```" in json_part:
-        json_part = json_part.split("```")[0]
-      try:
-        return json.loads(json_part.strip())
-      except json.JSONDecodeError:
-        pass
+  # Strip markdown fences first
+  stripped = _strip_markdown_fences(text)
+  try:
+    return json.loads(stripped)
+  except (json.JSONDecodeError, TypeError):
+    pass
 
-  # Try raw JSON extraction
-  if "{" in text:
+  # Try raw JSON extraction (brace matching)
+  if "{" in stripped:
     try:
-      start = text.index("{")
+      start = stripped.index("{")
       brace = 0
       end = start
-      for i, ch in enumerate(text[start:], start):
+      for i, ch in enumerate(stripped[start:], start):
         if ch == "{":
           brace += 1
         elif ch == "}":
@@ -849,7 +865,7 @@ def _parse_json_from_text(text: str) -> Optional[dict[str, Any]]:
           if brace == 0:
             end = i + 1
             break
-      return json.loads(text[start:end])
+      return json.loads(stripped[start:end])
     except (ValueError, json.JSONDecodeError):
       pass
 

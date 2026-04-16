@@ -355,6 +355,89 @@ class TestParseClassifications:
     assert len(results) == 1
     assert results[0].category == "positive"
 
+  def test_markdown_json_fence(self):
+    """parse_classifications should handle ```json fenced responses."""
+    config = _make_config()
+    inner = json.dumps([
+        {"metric_name": "tone", "category": "positive", "justification": "ok"},
+        {"metric_name": "safety", "category": "safe", "justification": "fine"},
+    ])
+    raw = f"```json\n{inner}\n```"
+    results = parse_classifications(raw, config)
+    assert len(results) == 2
+    assert results[0].category == "positive"
+    assert results[0].parse_error is False
+    assert results[1].category == "safe"
+    assert results[1].parse_error is False
+
+  def test_markdown_plain_fence(self):
+    """parse_classifications should handle plain ``` fenced responses."""
+    config = _make_config()
+    inner = json.dumps([
+        {"metric_name": "tone", "category": "positive"},
+        {"metric_name": "safety", "category": "safe"},
+    ])
+    raw = f"```\n{inner}\n```"
+    results = parse_classifications(raw, config)
+    assert len(results) == 2
+    assert results[0].category == "positive"
+    assert results[0].parse_error is False
+
+  def test_markdown_fence_no_newline(self):
+    """Handle ```json without newline after opening fence."""
+    config = _make_config()
+    inner = json.dumps([
+        {"metric_name": "tone", "category": "positive"},
+        {"metric_name": "safety", "category": "safe"},
+    ])
+    raw = f"```json{inner}```"
+    results = parse_classifications(raw, config)
+    assert len(results) == 2
+    assert results[0].category == "positive"
+    assert results[0].parse_error is False
+
+
+# ------------------------------------------------------------------ #
+# _strip_markdown_fences Tests                                         #
+# ------------------------------------------------------------------ #
+
+
+class TestStripMarkdownFences:
+  """Tests for the shared _strip_markdown_fences helper."""
+
+  def test_json_fence(self):
+    from bigquery_agent_analytics.evaluators import _strip_markdown_fences
+    assert _strip_markdown_fences('```json\n{"a": 1}\n```') == '{"a": 1}'
+
+  def test_plain_fence(self):
+    from bigquery_agent_analytics.evaluators import _strip_markdown_fences
+    assert _strip_markdown_fences('```\n[1, 2]\n```') == '[1, 2]'
+
+  def test_no_fence(self):
+    from bigquery_agent_analytics.evaluators import _strip_markdown_fences
+    assert _strip_markdown_fences('{"a": 1}') == '{"a": 1}'
+
+  def test_empty(self):
+    from bigquery_agent_analytics.evaluators import _strip_markdown_fences
+    assert _strip_markdown_fences('') == ''
+
+  def test_none(self):
+    from bigquery_agent_analytics.evaluators import _strip_markdown_fences
+    assert _strip_markdown_fences(None) is None
+
+  def test_no_newline_after_fence(self):
+    from bigquery_agent_analytics.evaluators import _strip_markdown_fences
+    assert _strip_markdown_fences('```json{"a": 1}```') == '{"a": 1}'
+
+  def test_whitespace_around(self):
+    from bigquery_agent_analytics.evaluators import _strip_markdown_fences
+    result = _strip_markdown_fences('  ```json\n  {"a": 1}  \n```  ')
+    assert '"a": 1' in result
+
+  def test_sql_fence(self):
+    from bigquery_agent_analytics.evaluators import _strip_markdown_fences
+    assert _strip_markdown_fences('```sql\nSELECT 1\n```') == 'SELECT 1'
+
 
 # ------------------------------------------------------------------ #
 # Parse Row Tests                                                      #
