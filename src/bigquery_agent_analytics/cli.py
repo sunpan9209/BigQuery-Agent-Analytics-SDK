@@ -716,8 +716,9 @@ def ontology_property_graph(
   try:
     from .ontology_models import load_graph_spec
     from .ontology_property_graph import OntologyPropertyGraphCompiler
+    from .resolved_spec import resolve_from_graph_spec
 
-    spec = load_graph_spec(spec_path, env=env)
+    spec = resolve_from_graph_spec(load_graph_spec(spec_path, env=env))
     compiler = OntologyPropertyGraphCompiler(
         project_id=project_id,
         dataset_id=dataset_id,
@@ -865,8 +866,9 @@ def ontology_showcase_gql(
   try:
     from .ontology_models import load_graph_spec
     from .ontology_orchestrator import compile_showcase_gql
+    from .resolved_spec import resolve_from_graph_spec
 
-    spec = load_graph_spec(spec_path, env=env)
+    spec = resolve_from_graph_spec(load_graph_spec(spec_path, env=env))
     gql = compile_showcase_gql(
         spec,
         project_id=project_id,

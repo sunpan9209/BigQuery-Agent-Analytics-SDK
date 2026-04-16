@@ -559,3 +559,165 @@ class TestInheritance:
     assert "weight" in logical_names
     assert "note" in logical_names
     assert len(logical_names) == 2
+
+
+class TestRoundTripKeyFidelity:
+  """Verify resolved_graph_to_ontology_binding preserves key semantics."""
+
+  def test_entity_keys_use_logical_names_not_physical(self):
+    """Reconstructed ontology must use logical property names for keys."""
+    ont, bnd = _load()  # account_id → acct_id rename
+    graph = resolve(ont, bnd)
+    from bigquery_agent_analytics.runtime_spec import resolved_graph_to_ontology_binding
+
+    rebuilt_ont, rebuilt_bnd, _ = resolved_graph_to_ontology_binding(graph)
+    acct = next(e for e in rebuilt_ont.entities if e.name == "Account")
+    # Keys must use logical name "account_id", not physical "acct_id"
+    assert acct.keys.primary == ["account_id"]
+
+  def test_relationship_additional_keys_preserved(self):
+    """Ontology-level keys.additional must survive resolve round-trip."""
+    ont = load_ontology_from_string(
+        textwrap.dedent(
+            """\
+      ontology: test
+      entities:
+        - name: Account
+          keys: {primary: [account_id]}
+          properties: [{name: account_id, type: string}]
+        - name: Security
+          keys: {primary: [security_id]}
+          properties: [{name: security_id, type: string}]
+      relationships:
+        - name: HOLDS
+          from: Account
+          to: Security
+          keys: {additional: [as_of]}
+          properties:
+            - {name: as_of, type: timestamp}
+            - {name: quantity, type: double}
+    """
+        )
+    )
+    bnd = load_binding_from_string(
+        textwrap.dedent(
+            """\
+      binding: b
+      ontology: test
+      target: {backend: bigquery, project: p, dataset: d}
+      entities:
+        - name: Account
+          source: t1
+          properties: [{name: account_id, column: acct_id}]
+        - name: Security
+          source: t2
+          properties: [{name: security_id, column: cusip}]
+      relationships:
+        - name: HOLDS
+          source: edges
+          from_columns: [a]
+          to_columns: [s]
+          properties:
+            - {name: as_of, column: snapshot_date}
+            - {name: quantity, column: qty}
+    """
+        ),
+        ontology=ont,
+    )
+    graph = resolve(ont, bnd)
+    # keys.additional carried on ResolvedRelationship
+    holds = graph.relationships[0]
+    assert holds.ontology_key_additional == ("as_of",)
+
+    # Round-trip reconstructs keys.additional
+    from bigquery_agent_analytics.runtime_spec import resolved_graph_to_ontology_binding
+
+    rebuilt_ont, _, _ = resolved_graph_to_ontology_binding(graph)
+    rebuilt_holds = rebuilt_ont.relationships[0]
+    assert rebuilt_holds.keys is not None
+    assert rebuilt_holds.keys.additional == ["as_of"]
+
+  def test_relationship_primary_keys_preserved(self):
+    """Ontology-level keys.primary on relationships must survive."""
+    ont = load_ontology_from_string(
+        textwrap.dedent(
+            """\
+      ontology: test
+      entities:
+        - name: A
+          keys: {primary: [id]}
+          properties: [{name: id, type: string}]
+      relationships:
+        - name: TRANSFER
+          from: A
+          to: A
+          keys: {primary: [txn_id]}
+          properties:
+            - {name: txn_id, type: string}
+    """
+        )
+    )
+    bnd = load_binding_from_string(
+        textwrap.dedent(
+            """\
+      binding: b
+      ontology: test
+      target: {backend: bigquery, project: p, dataset: d}
+      entities:
+        - name: A
+          source: t
+          properties: [{name: id, column: id}]
+      relationships:
+        - name: TRANSFER
+          source: edges
+          from_columns: [src]
+          to_columns: [dst]
+          properties: [{name: txn_id, column: txn_id}]
+    """
+        ),
+        ontology=ont,
+    )
+    graph = resolve(ont, bnd)
+    transfer = graph.relationships[0]
+    assert transfer.ontology_key_primary == ("txn_id",)
+
+    from bigquery_agent_analytics.runtime_spec import resolved_graph_to_ontology_binding
+
+    rebuilt_ont, _, _ = resolved_graph_to_ontology_binding(graph)
+    rebuilt_transfer = rebuilt_ont.relationships[0]
+    assert rebuilt_transfer.keys is not None
+    assert rebuilt_transfer.keys.primary == ["txn_id"]
+
+  def test_no_keys_relationship_round_trips_as_none(self):
+    """A relationship with no keys should reconstruct with keys=None."""
+    ont, bnd = _load()  # HOLDS has no keys in the shared fixture
+    graph = resolve(ont, bnd)
+    holds = graph.relationships[0]
+    assert holds.ontology_key_primary is None
+    assert holds.ontology_key_additional is None
+
+    from bigquery_agent_analytics.runtime_spec import resolved_graph_to_ontology_binding
+
+    rebuilt_ont, _, _ = resolved_graph_to_ontology_binding(graph)
+    rebuilt_holds = rebuilt_ont.relationships[0]
+    assert rebuilt_holds.keys is None
+
+
+class TestOrchestratorBridge:
+  """build_ontology_graph passes ResolvedGraph to consumers, not GraphSpec."""
+
+  def test_orchestrator_creates_resolved_spec(self):
+    """Verify the spec loaded by build_ontology_graph is a ResolvedGraph."""
+    # Build a ResolvedGraph the same way the orchestrator would.
+    from bigquery_agent_analytics.ontology_models import load_graph_spec
+    from bigquery_agent_analytics.ontology_orchestrator import compile_showcase_gql
+    from bigquery_agent_analytics.resolved_spec import resolve_from_graph_spec
+    from bigquery_agent_analytics.resolved_spec import ResolvedGraph
+
+    spec = resolve_from_graph_spec(
+        load_graph_spec("examples/ymgo_graph_spec.yaml", env="p.d")
+    )
+    assert isinstance(spec, ResolvedGraph)
+    # Proves compile_showcase_gql can consume it without AttributeError.
+    gql = compile_showcase_gql(spec, project_id="p", dataset_id="d")
+    assert "MATCH" in gql

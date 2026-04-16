@@ -50,8 +50,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from .ontology_models import GraphSpec
 from .ontology_models import load_graph_spec
+from .resolved_spec import ResolvedGraph
 
 logger = logging.getLogger("bigquery_agent_analytics." + __name__)
 
@@ -84,7 +84,7 @@ LIMIT @result_limit
 
 
 def compile_showcase_gql(
-    spec: GraphSpec,
+    spec: ResolvedGraph,
     project_id: str,
     dataset_id: str,
     graph_name: Optional[str] = None,
@@ -158,14 +158,14 @@ def compile_showcase_gql(
   # destination PKs + properties.
   return_cols = []
   for prop in src_entity.properties:
-    return_cols.append(f"{src_alias}.{prop.name} AS src_{prop.name}")
+    return_cols.append(f"{src_alias}.{prop.column} AS src_{prop.column}")
   for prop in rel.properties:
-    return_cols.append(f"{edge_alias}.{prop.name}")
+    return_cols.append(f"{edge_alias}.{prop.column}")
   for prop in dst_entity.properties:
-    return_cols.append(f"{dst_alias}.{prop.name} AS dst_{prop.name}")
+    return_cols.append(f"{dst_alias}.{prop.column} AS dst_{prop.column}")
 
   # Order by the source entity's first primary key.
-  order_column = f"{src_alias}.{src_entity.keys.primary[0]}"
+  order_column = f"{src_alias}.{src_entity.key_columns[0]}"
 
   return _SHOWCASE_GQL_TEMPLATE.format(
       graph_ref=graph_ref,
@@ -182,7 +182,7 @@ def compile_showcase_gql(
 
 
 def compile_lineage_gql(
-    spec: GraphSpec,
+    spec: ResolvedGraph,
     project_id: str,
     dataset_id: str,
     relationship_name: str,
@@ -241,11 +241,13 @@ def compile_lineage_gql(
 
   return_cols = []
   for prop in entity.properties:
-    return_cols.append(f"{prior_alias}.{prop.name} AS prior_{prop.name}")
+    return_cols.append(f"{prior_alias}.{prop.column} AS prior_{prop.column}")
   for prop in rel.properties:
-    return_cols.append(f"{edge_alias}.{prop.name}")
+    return_cols.append(f"{edge_alias}.{prop.column}")
   for prop in entity.properties:
-    return_cols.append(f"{current_alias}.{prop.name} AS current_{prop.name}")
+    return_cols.append(
+        f"{current_alias}.{prop.column} AS current_{prop.column}"
+    )
 
   return _LINEAGE_GQL_TEMPLATE.format(
       graph_ref=graph_ref,
@@ -327,9 +329,10 @@ def build_ontology_graph(
   from .ontology_graph import OntologyGraphManager
   from .ontology_materializer import OntologyMaterializer
   from .ontology_property_graph import OntologyPropertyGraphCompiler
+  # 1. Load spec and convert to ResolvedGraph.
+  from .resolved_spec import resolve_from_graph_spec
 
-  # 1. Load spec.
-  spec = load_graph_spec(spec_path, env=env)
+  spec = resolve_from_graph_spec(load_graph_spec(spec_path, env=env))
   name = graph_name or spec.name
   logger.info(
       "Loaded spec %r with %d entities, %d relationships.",

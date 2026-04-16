@@ -62,6 +62,8 @@ class ResolvedEntity:
   description: str = ""
   extends: Optional[str] = None
   metadata_columns: tuple[str, ...] = ("session_id", "extracted_at")
+  # Logical ontology key names for lossless reverse conversion.
+  ontology_key_primary: Optional[tuple[str, ...]] = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -72,6 +74,11 @@ class ResolvedRelationship:
   columns. ``from_session_column`` / ``to_session_column`` are the
   SDK-specific lineage session overrides (None if not configured).
   ``properties`` are in ontology declaration order.
+
+  ``ontology_key_primary`` / ``ontology_key_additional`` carry the
+  original ontology-level key declarations (using logical property
+  names) so that ``resolved_graph_to_ontology_binding()`` can
+  reconstruct a valid upstream Ontology without information loss.
   """
 
   name: str
@@ -85,6 +92,8 @@ class ResolvedRelationship:
   from_session_column: Optional[str] = None
   to_session_column: Optional[str] = None
   metadata_columns: tuple[str, ...] = ("session_id", "extracted_at")
+  ontology_key_primary: Optional[tuple[str, ...]] = None
+  ontology_key_additional: Optional[tuple[str, ...]] = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -275,6 +284,7 @@ def resolve(
             properties=tuple(properties),
             description=ont_entity.description or "",
             extends=ont_entity.extends,
+            ontology_key_primary=tuple(eff_keys.primary),
         )
     )
 
@@ -317,6 +327,15 @@ def resolve(
       from_session = lineage.from_session_column
       to_session = lineage.to_session_column
 
+    # Carry ontology-level key declarations for lossless reverse conversion.
+    ont_key_primary: tuple[str, ...] | None = None
+    ont_key_additional: tuple[str, ...] | None = None
+    if ont_rel.keys is not None:
+      if ont_rel.keys.primary:
+        ont_key_primary = tuple(ont_rel.keys.primary)
+      if ont_rel.keys.additional:
+        ont_key_additional = tuple(ont_rel.keys.additional)
+
     resolved_rels.append(
         ResolvedRelationship(
             name=ont_rel.name,
@@ -329,6 +348,8 @@ def resolve(
             description=ont_rel.description or "",
             from_session_column=from_session,
             to_session_column=to_session,
+            ontology_key_primary=ont_key_primary,
+            ontology_key_additional=ont_key_additional,
         )
     )
 
@@ -348,4 +369,80 @@ def resolve(
       name=ontology.ontology,
       entities=tuple(resolved_entities),
       relationships=tuple(resolved_rels),
+  )
+
+
+# -- Legacy bridge: GraphSpec → ResolvedGraph --------------------------------
+
+
+def resolve_from_graph_spec(spec) -> ResolvedGraph:
+  """Convert a legacy ``GraphSpec`` into a ``ResolvedGraph``.
+
+  This is a transitional bridge for code paths that still load from
+  combined graph-spec YAML (e.g. CLI commands).  Once all entry points
+  are migrated to separated ontology+binding YAML, this function is
+  deleted.
+
+  The ``GraphSpec`` is already a resolved view (property names are
+  physical column names, sources are fully qualified), so this is a
+  straightforward field-by-field copy with type changes.
+  """
+  entities: list[ResolvedEntity] = []
+  for e in spec.entities:
+    props = tuple(
+        ResolvedProperty(
+            column=p.name,
+            logical_name=p.name,
+            sdk_type=p.type,
+            description=getattr(p, "description", ""),
+        )
+        for p in e.properties
+    )
+    session_col = getattr(e.binding, "from_session_column", None)
+    # GraphSpec has already lost logical names — key_columns and
+    # ontology_key_primary are both the physical column name.
+    key_cols = tuple(e.keys.primary)
+    entities.append(
+        ResolvedEntity(
+            name=e.name,
+            source=e.binding.source,
+            key_columns=key_cols,
+            labels=tuple(getattr(e, "labels", [e.name])),
+            properties=props,
+            description=getattr(e, "description", ""),
+            extends=getattr(e, "extends", None),
+            ontology_key_primary=key_cols,
+        )
+    )
+
+  relationships: list[ResolvedRelationship] = []
+  for r in spec.relationships:
+    props = tuple(
+        ResolvedProperty(
+            column=p.name,
+            logical_name=p.name,
+            sdk_type=p.type,
+            description=getattr(p, "description", ""),
+        )
+        for p in r.properties
+    )
+    relationships.append(
+        ResolvedRelationship(
+            name=r.name,
+            source=r.binding.source,
+            from_entity=r.from_entity,
+            to_entity=r.to_entity,
+            from_columns=tuple(r.binding.from_columns or []),
+            to_columns=tuple(r.binding.to_columns or []),
+            properties=props,
+            description=getattr(r, "description", ""),
+            from_session_column=getattr(r.binding, "from_session_column", None),
+            to_session_column=getattr(r.binding, "to_session_column", None),
+        )
+    )
+
+  return ResolvedGraph(
+      name=spec.name,
+      entities=tuple(entities),
+      relationships=tuple(relationships),
   )
