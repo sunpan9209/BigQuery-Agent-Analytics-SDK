@@ -143,6 +143,31 @@ class TestViewManager:
     assert job_config is not None
     assert dict(job_config.labels or {}).get("sdk_feature") == "views"
 
+  def test_vanilla_client_emits_warn_once(self, caplog):
+    # PR #25 review: a caller who injects a vanilla bigquery.Client into
+    # ViewManager silently loses sdk / sdk_version / sdk_surface
+    # defaults, so those jobs disappear from INFORMATION_SCHEMA tracking
+    # queries. Mirror Phase 1's warn-once behavior from Client.bq_client.
+    import logging
+
+    from google.auth.credentials import AnonymousCredentials
+    from google.cloud import bigquery
+
+    vanilla = bigquery.Client(
+        project=PROJECT, credentials=AnonymousCredentials()
+    )
+    vm = ViewManager(project_id=PROJECT, dataset_id=DATASET, bq_client=vanilla)
+    with caplog.at_level(logging.WARNING):
+      _ = vm.bq_client
+      _ = vm.bq_client
+      _ = vm.bq_client
+    warnings = [
+        r
+        for r in caplog.records
+        if "SDK telemetry labels will not be applied" in r.message
+    ]
+    assert len(warnings) == 1
+
   def test_create_all_views(self, vm):
     created = vm.create_all_views()
     assert len(created) == len(_EVENT_VIEW_DEFS)

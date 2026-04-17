@@ -109,6 +109,29 @@ class TestCategoricalViewManager:
         dict(job_config.labels or {}).get("sdk_feature") == "eval-categorical"
     )
 
+  def test_vanilla_client_emits_warn_once(self, caplog):
+    # PR #25 review: mirror Phase 1 warn-once behavior.
+    import logging
+
+    from google.auth.credentials import AnonymousCredentials
+    from google.cloud import bigquery
+
+    vanilla = bigquery.Client(
+        project=PROJECT, credentials=AnonymousCredentials()
+    )
+    vm = CategoricalViewManager(
+        project_id=PROJECT, dataset_id=DATASET, bq_client=vanilla
+    )
+    with caplog.at_level(logging.WARNING):
+      _ = vm.bq_client
+      _ = vm.bq_client
+    warnings = [
+        r
+        for r in caplog.records
+        if "SDK telemetry labels will not be applied" in r.message
+    ]
+    assert len(warnings) == 1
+
   def test_create_all_views(self, vm):
     created = vm.create_all_views()
     assert len(created) == len(_CATEGORICAL_VIEW_DEFS)

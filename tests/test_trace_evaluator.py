@@ -417,6 +417,33 @@ class TestBigQueryTraceEvaluator:
     assert job_config is not None
     assert dict(job_config.labels or {}).get("sdk_feature") == "trace-read"
 
+  def test_vanilla_client_emits_warn_once(self, caplog):
+    # PR #25 review: mirror Phase 1 warn-once behavior on the evaluator's
+    # `client` property so vanilla bigquery.Client injections are
+    # discoverable in logs and not silently missing from telemetry.
+    import logging
+
+    from google.auth.credentials import AnonymousCredentials
+    from google.cloud import bigquery
+
+    vanilla = bigquery.Client(
+        project="test-project", credentials=AnonymousCredentials()
+    )
+    evaluator = BigQueryTraceEvaluator(
+        project_id="test-project",
+        dataset_id="test-dataset",
+        client=vanilla,
+    )
+    with caplog.at_level(logging.WARNING):
+      _ = evaluator.client
+      _ = evaluator.client
+    warnings = [
+        r
+        for r in caplog.records
+        if "SDK telemetry labels will not be applied" in r.message
+    ]
+    assert len(warnings) == 1
+
   @pytest.mark.asyncio
   async def test_evaluate_session_with_trajectory(self, evaluator, mock_client):
     """Test evaluating session with golden trajectory."""
