@@ -135,9 +135,11 @@ ORDER BY timestamp ASC
 
 _LIST_TRACES_QUERY = """\
 WITH trace_sessions AS (
-  SELECT DISTINCT session_id
+  SELECT session_id, MAX(timestamp) AS latest_ts
   FROM `{project}.{dataset}.{table}`
   WHERE {where}
+  GROUP BY session_id
+  ORDER BY latest_ts DESC
   LIMIT @trace_limit
 )
 SELECT
