@@ -1406,8 +1406,8 @@ class TestFinishReasonLogging:
 # ------------------------------------------------------------------ #
 
 
-class TestRetryNullSessions:
-  """Tests for _retry_null_sessions on the Client."""
+class TestRetryFailedSessions:
+  """Tests for _retry_failed_sessions on the Client."""
 
   def _make_client(self):
     """Build a Client with a mocked BQ client."""
@@ -1449,7 +1449,7 @@ class TestRetryNullSessions:
         "bigquery_agent_analytics.client._run_sync",
         return_value=[good_result],
     ):
-      results = client._retry_null_sessions(
+      results = client._retry_failed_sessions(
           transcripts,
           config,
           "gemini-2.5-flash",
@@ -1487,7 +1487,7 @@ class TestRetryNullSessions:
         "bigquery_agent_analytics.client._run_sync",
         return_value=[bad_result],
     ) as mock_run:
-      results = client._retry_null_sessions(
+      results = client._retry_failed_sessions(
           transcripts,
           config,
           "gemini-2.5-flash",
@@ -1507,7 +1507,7 @@ class TestRetryNullSessions:
         "bigquery_agent_analytics.client._run_sync",
         side_effect=RuntimeError("API down"),
     ):
-      results = client._retry_null_sessions(
+      results = client._retry_failed_sessions(
           transcripts,
           config,
           "gemini-2.5-flash",
@@ -1559,7 +1559,7 @@ class TestRetryNullSessions:
         "bigquery_agent_analytics.client._run_sync",
         return_value=[good_result, bad_result],
     ):
-      results = client._retry_null_sessions(
+      results = client._retry_failed_sessions(
           transcripts,
           config,
           "gemini-2.5-flash",
@@ -1617,7 +1617,7 @@ class TestRetryNullSessions:
 
     with patch.object(
         client,
-        "_retry_null_sessions",
+        "_retry_failed_sessions",
         return_value=[retry_result],
     ) as mock_retry:
       results, retry_meta = client._categorical_ai_generate(
@@ -1633,7 +1633,7 @@ class TestRetryNullSessions:
     assert "s2" in call_args[0][0]
     assert "s1" not in call_args[0][0]
     assert len(results) == 2
-    assert retry_meta["null_count"] == 1
+    assert retry_meta["failed_count"] == 1
     assert retry_meta["retry_attempted"] is True
 
   def test_ai_generate_no_retry_when_all_succeed(self):
@@ -1660,7 +1660,7 @@ class TestRetryNullSessions:
 
     with patch.object(
         client,
-        "_retry_null_sessions",
+        "_retry_failed_sessions",
     ) as mock_retry:
       results, retry_meta = client._categorical_ai_generate(
           config,
@@ -1692,7 +1692,7 @@ class TestRetryNullSessions:
 
     with patch.object(
         client,
-        "_retry_null_sessions",
+        "_retry_failed_sessions",
     ) as mock_retry:
       results, retry_meta = client._categorical_ai_generate(
           config,
@@ -1705,3 +1705,67 @@ class TestRetryNullSessions:
     mock_retry.assert_not_called()
     assert len(results) == 1
     assert retry_meta == {}
+
+  def test_ai_generate_detects_parse_error_classifications(self):
+    """Non-NULL but unparseable classifications should also trigger retry."""
+    client = self._make_client()
+    config = _make_config()
+
+    valid_json = json.dumps(
+        [
+            {"metric_name": "tone", "category": "positive"},
+            {"metric_name": "safety", "category": "safe"},
+        ]
+    )
+
+    mock_rows = [
+        {
+            "session_id": "s1",
+            "transcript": "text1",
+            "classifications": valid_json,
+        },
+        {
+            "session_id": "s2",
+            "transcript": "text2",
+            "classifications": "not valid json",
+        },
+    ]
+
+    client.bq_client.query.return_value.result.return_value = mock_rows
+
+    retry_result = CategoricalSessionResult(
+        session_id="s2",
+        metrics=[
+            CategoricalMetricResult(
+                metric_name="tone",
+                category="negative",
+                passed_validation=True,
+            ),
+            CategoricalMetricResult(
+                metric_name="safety",
+                category="safe",
+                passed_validation=True,
+            ),
+        ],
+    )
+
+    with patch.object(
+        client,
+        "_retry_failed_sessions",
+        return_value=[retry_result],
+    ) as mock_retry:
+      results, retry_meta = client._categorical_ai_generate(
+          config,
+          "t",
+          "1=1",
+          [],
+          "gemini-2.5-flash",
+      )
+
+    mock_retry.assert_called_once()
+    call_args = mock_retry.call_args
+    assert "s2" in call_args[0][0]
+    assert "s1" not in call_args[0][0]
+    assert len(results) == 2
+    assert retry_meta["failed_count"] == 1
+    assert retry_meta["retry_attempted"] is True

@@ -49,6 +49,7 @@ import concurrent.futures
 from datetime import datetime
 from datetime import timezone
 import logging
+import time
 from typing import Any, Optional
 
 from google.cloud import bigquery
@@ -1357,7 +1358,7 @@ class Client:
       params: list,
       endpoint: str,
       connection_id: Optional[str] = None,
-  ) -> list:
+  ) -> tuple[list, dict]:
     """Classifies sessions using BigQuery AI.GENERATE.
 
     Sessions where AI.GENERATE returns NULL (e.g. due to rate
@@ -1391,26 +1392,26 @@ class Client:
     results = list(self.bq_client.query(query, job_config=job_config).result())
 
     session_results = []
-    null_sessions = {}
+    failed_sessions = {}
     for row in results:
       r = dict(row)
       sid = r.get("session_id", "unknown")
       parsed = parse_categorical_row(sid, r, config)
       has_parse_error = any(m.parse_error for m in parsed.metrics)
       if has_parse_error and r.get("transcript"):
-        null_sessions[sid] = r.get("transcript", "")
+        failed_sessions[sid] = r.get("transcript", "")
       session_results.append(parsed)
 
     retry_meta = {}
-    if null_sessions:
+    if failed_sessions:
       logger.warning(
           "AI.GENERATE returned NULL/unparseable for %d session(s), "
           "retrying via Gemini API: %s",
-          len(null_sessions),
-          ", ".join(null_sessions.keys()),
+          len(failed_sessions),
+          ", ".join(failed_sessions.keys()),
       )
-      retried = self._retry_null_sessions(
-          null_sessions,
+      retried = self._retry_failed_sessions(
+          failed_sessions,
           config,
           endpoint,
           max_retries=3,
@@ -1425,27 +1426,30 @@ class Client:
             1 for r in retried if not any(m.parse_error for m in r.metrics)
         )
         logger.info(
-            "Gemini API retry resolved %d/%d NULL sessions",
+            "Gemini API retry resolved %d/%d failed sessions",
             resolved,
-            len(null_sessions),
+            len(failed_sessions),
         )
       retry_meta = {
-          "null_count": len(null_sessions),
+          "failed_count": len(failed_sessions),
           "retry_attempted": True,
           "retry_resolved": resolved,
-          "retry_unresolved": len(null_sessions) - resolved,
+          "retry_unresolved": len(failed_sessions) - resolved,
       }
 
     return session_results, retry_meta
 
-  def _retry_null_sessions(
+  def _retry_failed_sessions(
       self,
       transcripts: dict[str, str],
       config: CategoricalEvaluationConfig,
       endpoint: str,
       max_retries: int = 3,
   ) -> list:
-    """Retries classification for NULL sessions via Gemini API.
+    """Retries classification for failed sessions via Gemini API.
+
+    Note: This method is synchronous and must not be called from
+    an async context with an already-running event loop.
 
     Args:
         transcripts: Maps session_id to transcript text.
@@ -1464,8 +1468,6 @@ class Client:
       if not remaining:
         break
       if attempt > 1:
-        import time
-
         backoff = 2 ** (attempt - 2)
         logger.info(
             "Retry backoff: sleeping %ds before attempt %d", backoff, attempt
@@ -1478,19 +1480,20 @@ class Client:
         still_failed = {}
         for r in results:
           has_error = any(m.parse_error for m in r.metrics)
-          if has_error and r.session_id in remaining:
-            still_failed[r.session_id] = remaining[r.session_id]
-            for m in r.metrics:
-              if m.parse_error:
-                logger.warning(
-                    "Retry attempt %d, session %s, metric %s: "
-                    "parse_error=True, raw_response=%s",
-                    attempt,
-                    r.session_id,
-                    m.metric_name,
-                    repr(m.raw_response[:500] if m.raw_response else None),
-                )
-                break
+          if has_error:
+            if r.session_id in remaining:
+              still_failed[r.session_id] = remaining[r.session_id]
+              for m in r.metrics:
+                if m.parse_error:
+                  logger.warning(
+                      "Retry attempt %d, session %s, metric %s: "
+                      "parse_error=True, raw_response=%s",
+                      attempt,
+                      r.session_id,
+                      m.metric_name,
+                      repr(m.raw_response[:500] if m.raw_response else None),
+                  )
+                  break
           else:
             all_results[r.session_id] = r
         remaining = still_failed
@@ -1500,7 +1503,7 @@ class Client:
               attempt,
               len(remaining),
           )
-      except (RuntimeError, ValueError, OSError) as e:
+      except Exception as e:  # Broad catch: retry loop logs + continues
         logger.warning(
             "Gemini API retry attempt %d failed: %s (type=%s)",
             attempt,
