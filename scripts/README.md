@@ -45,7 +45,7 @@ EVAL_MODEL_ID=gemini-2.5-flash
 # From the repo root:
 ./scripts/quality_report.sh                         # evaluate last 100 sessions
 ./scripts/quality_report.sh --limit 500             # evaluate last 500 sessions
-./scripts/quality_report.sh --time_period 7d        # evaluate last 7 days
+./scripts/quality_report.sh --time-period 7d        # evaluate last 7 days
 ./scripts/quality_report.sh --report                # also generate markdown report
 ./scripts/quality_report.sh --no-eval               # browse Q&A only (no evaluation)
 ./scripts/quality_report.sh --persist               # persist results to BigQuery
@@ -92,4 +92,4 @@ The script automatically detects and resolves responses from remote A2A
 
 ### Sample report output
 
-[Sample report output](reports/quality_report_20260417_214854.md)
+[Sample report output](sample_report.md)

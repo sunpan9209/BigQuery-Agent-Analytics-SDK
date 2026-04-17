@@ -33,7 +33,7 @@ Optional environment variables:
 Usage:
     python quality_report.py                      # evaluate last 100 sessions
     python quality_report.py --limit 50           # evaluate last 50 sessions
-    python quality_report.py --time_period 7d     # evaluate last 7 days
+    python quality_report.py --time-period 7d     # evaluate last 7 days
     python quality_report.py --report             # also generate markdown report
     python quality_report.py --no-eval            # browse Q&A only
     python quality_report.py --persist            # persist results to BigQuery
@@ -47,6 +47,22 @@ import os
 import sys
 import time
 from datetime import datetime
+
+
+def _positive_int(value):
+  n = int(value)
+  if n < 1:
+    raise argparse.ArgumentTypeError(f"must be >= 1, got {n}")
+  return n
+
+
+def _samples_arg(value):
+  if value == "all":
+    return "all"
+  n = int(value)
+  if n < 1:
+    raise argparse.ArgumentTypeError("--samples must be 'all' or >= 1")
+  return str(n)
 
 _script_dir = os.path.dirname(os.path.abspath(__file__))
 _repo_root = os.path.join(_script_dir, "..")
@@ -65,9 +81,6 @@ try:
 except ImportError:
   pass
 
-os.environ.setdefault("GOOGLE_GENAI_USE_VERTEXAI", "true")
-os.environ.setdefault("GOOGLE_CLOUD_LOCATION", "global")
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -83,13 +96,15 @@ logger = logging.getLogger("quality_report")
 def _require_env(name: str) -> str:
   val = os.environ.get(name)
   if not val:
-    logger.error(f"Required environment variable {name} is not set.")
+    logger.error("Required environment variable %s is not set.", name)
     sys.exit(1)
   return val
 
 
 def _load_config():
   """Load configuration from environment variables (called lazily)."""
+  os.environ.setdefault("GOOGLE_GENAI_USE_VERTEXAI", "true")
+  os.environ.setdefault("GOOGLE_CLOUD_LOCATION", "global")
   global PROJECT_ID, DATASET_ID, TABLE_ID, DATASET_LOCATION, EVAL_MODEL_ID
   PROJECT_ID = _require_env("PROJECT_ID")
   DATASET_ID = _require_env("DATASET_ID")
@@ -271,7 +286,10 @@ def get_a2a_response(trace) -> tuple:
           if text:
             return text, agent or span.agent or "remote_agent"
         except (json.JSONDecodeError, TypeError):
-          return c, span.agent or "remote_agent"
+          logger.warning(
+              "Failed to parse A2A payload for session, skipping"
+          )
+          return None, None
   return None, None
 
 
@@ -323,7 +341,7 @@ def resolve_trace_responses(traces):
     })
 
   if remote_lookups:
-    logger.info(f"Resolved {remote_lookups} A2A responses")
+    logger.info("Resolved %d A2A responses", remote_lookups)
 
   return results
 
@@ -363,7 +381,7 @@ def run_evaluation(
   report = client.evaluate_categorical(config=cat_config, filters=trace_filter)
 
   all_session_ids = [sr.session_id for sr in report.session_results]
-  logger.info(f"Resolving responses for {len(all_session_ids)} sessions...")
+  logger.info("Resolving responses for %d sessions...", len(all_session_ids))
 
   traces = client.list_traces(
       filter_criteria=TraceFilter(
@@ -391,8 +409,6 @@ def _category_label(category):
       "grounded": "\u2705 GROUNDED",
       "ungrounded": "\u274c NOT GROUNDED",
       "no_tool_needed": "\u2796 NO TOOL NEEDED",
-      "good": "\u2705 GOOD",
-      "bad": "\u274c BAD",
   }
   return labels.get(category, (category or "?").upper())
 
@@ -405,12 +421,21 @@ def run_browse(args):
   from bigquery_agent_analytics import TraceFilter
 
   client = get_client()
-  logger.info(f"Project: {PROJECT_ID}, Dataset: {DATASET_ID}, Table: {TABLE_ID}")
-
-  traces = client.list_traces(
-      filter_criteria=TraceFilter(limit=args.limit)
+  logger.info(
+      "Project: %s, Dataset: %s, Table: %s", PROJECT_ID, DATASET_ID, TABLE_ID
   )
-  logger.info(f"Fetched {len(traces)} sessions")
+
+  time_range = args.time_period
+  if time_range and time_range.lower() == "all":
+    time_range = None
+  if time_range:
+    trace_filter = TraceFilter.from_cli_args(last=time_range)
+  else:
+    trace_filter = TraceFilter()
+  trace_filter.limit = args.limit
+
+  traces = client.list_traces(filter_criteria=trace_filter)
+  logger.info("Fetched %d sessions", len(traces))
 
   results = resolve_trace_responses(traces)
 
@@ -455,13 +480,18 @@ def run_browse(args):
 
 def run_eval(args):
   model = args.model or EVAL_MODEL_ID
-  logger.info(f"Project: {PROJECT_ID}, Dataset: {DATASET_ID}, Table: {TABLE_ID}")
-  logger.info(f"Location: {DATASET_LOCATION}")
-  logger.info(f"Evaluation model: {model}")
   logger.info(
-      f"Parameters: time_period={args.time_period or 'all'}, limit={args.limit}, "
-      f"persist={args.persist}, report={args.report}, "
-      f"samples={args.samples or 'default (10/5/3)'}"
+      "Project: %s, Dataset: %s, Table: %s", PROJECT_ID, DATASET_ID, TABLE_ID
+  )
+  logger.info("Location: %s", DATASET_LOCATION)
+  logger.info("Evaluation model: %s", model)
+  logger.info(
+      "Parameters: time_period=%s, limit=%d, persist=%s, report=%s, samples=%s",
+      args.time_period or "all",
+      args.limit,
+      args.persist,
+      args.report,
+      args.samples or "default (10/5/3)",
   )
 
   t0 = time.time()
@@ -472,8 +502,8 @@ def run_eval(args):
         model=model,
         persist=args.persist,
     )
-  except Exception as e:
-    logger.error(f"Evaluation failed: {e}")
+  except Exception:
+    logger.exception("Evaluation failed")
     sys.exit(1)
   elapsed = time.time() - t0
 
@@ -519,9 +549,11 @@ def _build_agent_stats(report, resolved_map):
           "unhelpful": 0,
           "partial": 0,
           "unclassified": 0,
-          "is_a2a": ctx.get("is_a2a", False),
+          "a2a_count": 0,
       }
     agent_stats[agent]["total"] += 1
+    if ctx.get("is_a2a"):
+      agent_stats[agent]["a2a_count"] += 1
     found_usefulness = False
     for mr in sr.metrics:
       if mr.metric_name == "response_usefulness":
@@ -653,7 +685,12 @@ def _print_eval_results(report, resolved_map, samples=None):
           if total_unhelpful_all > 0
           else 0
       )
-      a2a_tag = " [A2A]" if stats["is_a2a"] else ""
+      a2a_n = stats["a2a_count"]
+      a2a_tag = (
+          f" [A2A:{a2a_n}/{total}]" if 0 < a2a_n < total
+          else " [A2A]" if a2a_n == total
+          else ""
+      )
       status = (
           "\U0001f7e2"
           if helpful_pct >= 80
@@ -689,7 +726,12 @@ def _print_eval_results(report, resolved_map, samples=None):
             else 0
         )
         bar = "\u2588" * int(contrib / 2)
-        a2a_tag = " [A2A]" if stats["is_a2a"] else ""
+        a2a_n = stats["a2a_count"]
+        a2a_tag = (
+            f" [A2A:{a2a_n}/{stats['total']}]" if 0 < a2a_n < stats["total"]
+            else " [A2A]" if a2a_n == stats["total"]
+            else ""
+        )
         agent_name = f"{agent}{a2a_tag}"
         print(
             f"  {agent_name:<40s} {stats['unhelpful']:>3d}"
@@ -830,7 +872,13 @@ def _write_md_report(report, resolved_map, args):
       helpful_pct = (
           (stats["meaningful"] / classified * 100) if classified > 0 else 0
       )
-      a2a_tag = " [A2A]" if stats["is_a2a"] else ""
+      a2a_n = stats["a2a_count"]
+      total = stats["total"]
+      a2a_tag = (
+          f" [A2A:{a2a_n}/{total}]" if 0 < a2a_n < total
+          else " [A2A]" if a2a_n == total
+          else ""
+      )
       status = (
           "\U0001f7e2"
           if helpful_pct >= 80
@@ -866,7 +914,8 @@ def _write_md_report(report, resolved_map, args):
       w(f"### `{sid}`{a2a_tag} \u2192 {answered_by}")
       w("")
       w(f"- **Question:** {q}")
-      w(f"- **Response:** {r[:500]}")
+      r_display = (r[:500] + "\u2026") if len(r) > 500 else r
+      w(f"- **Response:** {r_display}")
       for mr in sr.metrics:
         label = _category_label(mr.category)
         display = _METRIC_LABELS.get(mr.metric_name, mr.metric_name)
@@ -897,7 +946,8 @@ def _write_md_report(report, resolved_map, args):
       w(f"### `{sid}`{a2a_tag} \u2192 {answered_by}")
       w("")
       w(f"- **Question:** {q}")
-      w(f"- **Response:** {r[:500]}")
+      r_display = (r[:500] + "\u2026") if len(r) > 500 else r
+      w(f"- **Response:** {r_display}")
       for mr in sr.metrics:
         label = _category_label(mr.category)
         display = _METRIC_LABELS.get(mr.metric_name, mr.metric_name)
@@ -943,13 +993,14 @@ Examples:
   %(prog)s --no-eval                 Browse Q&A pairs without evaluation
   %(prog)s --report                  Also generate a Markdown report
   %(prog)s --persist                 Evaluate and persist results to BQ
-  %(prog)s --time_period 7d          Evaluate last 7 days
+  %(prog)s --time-period 7d          Evaluate last 7 days
   %(prog)s --samples 20              Show up to 20 sessions per category
   %(prog)s --samples all             Show all sessions per category
       """,
   )
   parser.add_argument(
-      "--limit", type=int, default=100, help="Number of sessions (default: 100)"
+      "--limit", type=_positive_int, default=100,
+      help="Number of sessions (default: 100)",
   )
   parser.add_argument(
       "--eval",
@@ -964,7 +1015,7 @@ Examples:
       help="Browse Q&A pairs without evaluation",
   )
   parser.add_argument(
-      "--time_period",
+      "--time-period",
       type=str,
       default="all",
       help="Time range: 24h, 7d, or 'all' (default: all)",
@@ -987,7 +1038,7 @@ Examples:
   )
   parser.add_argument(
       "--samples",
-      type=str,
+      type=_samples_arg,
       default=None,
       help="Max sample sessions to display per category, or 'all' (default: 10/5/3)",
   )

@@ -7,7 +7,7 @@
 #   ./quality_report.sh --no-eval                # browse Q&A only
 #   ./quality_report.sh --report                 # also generate markdown report
 #   ./quality_report.sh --persist                # evaluate + persist to BQ
-#   ./quality_report.sh --time_period 7d         # evaluate last 7 days
+#   ./quality_report.sh --time-period 7d         # evaluate last 7 days
 #   ./quality_report.sh --samples 20             # show 20 sessions per category
 #   ./quality_report.sh --samples all            # show all sessions
 
@@ -35,8 +35,21 @@ if [[ " $* " != *" --no-eval "* ]]; then
     mkdir -p "${REPORTS_DIR}"
     TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
     LOG_FILE="${REPORTS_DIR}/quality_report_${TIMESTAMP}.log"
-    echo -e "\033[0;32mLog: ${LOG_FILE}\033[0m"
+    if [ -t 1 ]; then
+        echo -e "\033[0;32mLog: ${LOG_FILE}\033[0m"
+    else
+        echo "Log: ${LOG_FILE}"
+    fi
     python3 "${SCRIPT_DIR}/quality_report.py" "$@" 2>&1 | tee "${LOG_FILE}"
 else
-    python3 "${SCRIPT_DIR}/quality_report.py" "$@"
+    REPORTS_DIR="${SCRIPT_DIR}/reports"
+    mkdir -p "${REPORTS_DIR}"
+    TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+    LOG_FILE="${REPORTS_DIR}/quality_browse_${TIMESTAMP}.log"
+    if [ -t 1 ]; then
+        echo -e "\033[0;32mLog: ${LOG_FILE}\033[0m"
+    else
+        echo "Log: ${LOG_FILE}"
+    fi
+    python3 "${SCRIPT_DIR}/quality_report.py" "$@" 2>&1 | tee "${LOG_FILE}"
 fi
