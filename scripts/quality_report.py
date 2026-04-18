@@ -67,26 +67,32 @@ def _samples_arg(value):
 _script_dir = os.path.dirname(os.path.abspath(__file__))
 _repo_root = os.path.join(_script_dir, "..")
 
-# Load .env if present (optional convenience)
-try:
-  from dotenv import load_dotenv
-
-  for candidate in [
-      os.path.join(_script_dir, ".env"),
-      os.path.join(_repo_root, ".env"),
-  ]:
-    if os.path.isfile(candidate):
-      load_dotenv(candidate, override=True)
-      break
-except ImportError:
-  pass
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%H:%M:%S",
-)
 logger = logging.getLogger("quality_report")
+
+
+def _configure_logging():
+  """Configure logging format. Called once from main()."""
+  logging.basicConfig(
+      level=logging.INFO,
+      format="%(asctime)s [%(levelname)s] %(message)s",
+      datefmt="%H:%M:%S",
+  )
+
+
+def _load_dotenv():
+  """Load .env file if present (optional convenience)."""
+  try:
+    from dotenv import load_dotenv
+
+    for candidate in [
+        os.path.join(_script_dir, ".env"),
+        os.path.join(_repo_root, ".env"),
+    ]:
+      if os.path.isfile(candidate):
+        load_dotenv(candidate, override=True)
+        break
+  except ImportError:
+    pass
 
 
 # ---------------------------------------------------------------------------
@@ -1045,6 +1051,8 @@ Examples:
 
   args = parser.parse_args()
 
+  _configure_logging()
+  _load_dotenv()
   _load_config()
 
   if args.eval:
