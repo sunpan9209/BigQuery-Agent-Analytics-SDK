@@ -20,9 +20,16 @@ Grouped by workflow family rather than one test per site:
 - GQL queries (reasoning, causal, trace, audit)
 - Decision-semantics (extract + store + edge creation)
 - World-change detection
+- Loop-labeling regression guards: every loop pattern that either
+  rebuilds a fresh labeled config per iteration (DDL loop) OR shares
+  one labeled config across all iterations (delete/insert loops).
+- Warn-once pattern for the single class that accepts an injected
+  client.
 
-Plus one async-ordering guard (context_graph is sync but the same pattern
-applies) and the warn-once test for the single class.
+No async guard here — context_graph.py is fully synchronous. The
+Phase 0 `test_survives_run_in_executor_dispatch` test already covers
+the async-executor-vs-label-ordering regression for the SDK as a
+whole.
 """
 
 import logging
@@ -224,6 +231,69 @@ class TestWorldChangeLabels:
     _sql, labels = _labels_per_call(mock_bq)[0]
     assert labels.get("sdk_feature") == "context-graph"
     assert "sdk_ai_function" not in labels
+
+
+# ------------------------------------------------------------------ #
+# Loop-labeling regression guards                                      #
+# ------------------------------------------------------------------ #
+
+
+class TestSharedConfigLoopsKeepLabels:
+  """Three methods dispatch multiple queries that share a single
+  `job_config` across a loop or sequence:
+
+  - `create_cross_links`: DELETE then INSERT, both reusing one config.
+  - `_delete_decision_data_for_sessions`: 4 DELETEs in a loop.
+  - `create_decision_edges`: 2 DELETE-loop iterations + 2 explicit
+    INSERTs, all sharing one config.
+
+  These are the complement to `test_ensure_decision_tables_labels_each_ddl`
+  (which proves the fresh-config-per-iteration pattern works).
+  Regression guard: if someone later splits a shared config out of the
+  loop without also labeling the new one — OR strips labels after
+  construction in some future refactor — at least one iteration's
+  query will lose its label. Assert every query carries
+  sdk_feature=context-graph."""
+
+  def test_create_cross_links_delete_insert_keep_labels(self):
+    mock_bq = _mock_bq_client()
+    mgr = _make_manager(mock_bq)
+    mgr.create_cross_links(["sess-1", "sess-2"])
+    # Expect 3 queries: CREATE TABLE DDL (fresh config), DELETE
+    # (shared config), INSERT (same shared config).
+    features = _all_feature_labels(mock_bq)
+    assert (
+        len(features) >= 2
+    ), f"expected ≥2 labeled queries (delete+insert share a config); got {features}"
+    for f in features:
+      assert f == "context-graph"
+
+  def test_delete_decision_data_labels_every_iteration(self):
+    # 4 DELETEs run in a Python loop, each using the single shared
+    # labeled `job_config` built before the loop.
+    mock_bq = _mock_bq_client()
+    mgr = _make_manager(mock_bq)
+    mgr._delete_decision_data_for_sessions(["sess-1"])
+    features = _all_feature_labels(mock_bq)
+    assert (
+        len(features) == 4
+    ), f"expected exactly 4 DELETEs in the loop; got {len(features)}"
+    for f in features:
+      assert f == "context-graph"
+
+  def test_create_decision_edges_all_queries_labeled(self):
+    # `create_decision_edges` runs: _ensure_decision_tables (4 DDLs,
+    # fresh configs) + 2 DELETEs (shared config) + 2 INSERTs (same
+    # shared config) = 8 total queries. Every one should be labeled.
+    mock_bq = _mock_bq_client()
+    mgr = _make_manager(mock_bq)
+    mgr.create_decision_edges(["sess-1"])
+    features = _all_feature_labels(mock_bq)
+    assert (
+        len(features) >= 8
+    ), f"expected ≥8 queries (4 DDLs + 2 DELETEs + 2 INSERTs); got {len(features)}"
+    for f in features:
+      assert f == "context-graph"
 
 
 # ------------------------------------------------------------------ #
