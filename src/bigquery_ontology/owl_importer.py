@@ -179,7 +179,8 @@ class _DropSummary:
 
 
 def _pick_primary_label(
-    labels, language: str = "en",
+    labels,
+    language: str = "en",
 ) -> tuple[str | None, list[str], dict[str, str]]:
   """Pick the best label as description, return rest as synonyms.
 
@@ -211,7 +212,9 @@ def _pick_primary_label(
 
 
 def _extract_labels_and_description(
-    g: Graph, iri: URIRef, language: str = "en",
+    g: Graph,
+    iri: URIRef,
+    language: str = "en",
 ) -> tuple[str | None, list[str], dict[str, str]]:
   """Extract rdfs:label → description, SKOS labels → synonyms.
 
@@ -380,7 +383,9 @@ def _collect_drop_annotations(
 
 
 def _extract_entities(
-    g: Graph, namespaces: list[str], drops: _DropSummary,
+    g: Graph,
+    namespaces: list[str],
+    drops: _DropSummary,
     language: str = "en",
 ) -> dict[str, _ImportedEntity]:
   entities: dict[str, _ImportedEntity] = {}
@@ -403,7 +408,9 @@ def _extract_entities(
       )
 
     description, synonyms, lang_anns = _extract_labels_and_description(
-        g, cls, language,
+        g,
+        cls,
+        language,
     )
     drops.skos_labels_discarded_by_language += len(lang_anns)
     extends, extends_fill_in, extends_candidates, parent_anns = (
@@ -538,7 +545,9 @@ def _extract_relationships(
       )
 
     description, synonyms, lang_anns = _extract_labels_and_description(
-        g, prop, language,
+        g,
+        prop,
+        language,
     )
     drops.skos_labels_discarded_by_language += len(lang_anns)
 
@@ -656,30 +665,38 @@ def _resolve_keys(entities: dict[str, _ImportedEntity]) -> None:
 _SKOS_LITERAL_PREDICATES: dict[URIRef, str] = {}
 # Populated lazily after rdflib is imported (SKOS namespace is module-level).
 
+
 def _skos_literal_preds() -> dict[URIRef, str]:
   if not _SKOS_LITERAL_PREDICATES:
-    _SKOS_LITERAL_PREDICATES.update({
-        SKOS.definition: "skos:definition",
-        SKOS.notation: "skos:notation",
-        SKOS.scopeNote: "skos:scopeNote",
-        SKOS.example: "skos:example",
-        SKOS.historyNote: "skos:historyNote",
-        SKOS.editorialNote: "skos:editorialNote",
-        SKOS.changeNote: "skos:changeNote",
-    })
+    _SKOS_LITERAL_PREDICATES.update(
+        {
+            SKOS.definition: "skos:definition",
+            SKOS.notation: "skos:notation",
+            SKOS.scopeNote: "skos:scopeNote",
+            SKOS.example: "skos:example",
+            SKOS.historyNote: "skos:historyNote",
+            SKOS.editorialNote: "skos:editorialNote",
+            SKOS.changeNote: "skos:changeNote",
+        }
+    )
   return _SKOS_LITERAL_PREDICATES
+
 
 # SKOS reference predicates that map to annotations (IRI target stored as
 # string value).
 _SKOS_REF_ANNOTATION_PREDICATES: dict[URIRef, str] = {}
 
+
 def _skos_ref_ann_preds() -> dict[URIRef, str]:
   if not _SKOS_REF_ANNOTATION_PREDICATES:
-    _SKOS_REF_ANNOTATION_PREDICATES.update({
-        SKOS.inScheme: "skos:inScheme",
-        SKOS.topConceptOf: "skos:topConceptOf",
-    })
+    _SKOS_REF_ANNOTATION_PREDICATES.update(
+        {
+            SKOS.inScheme: "skos:inScheme",
+            SKOS.topConceptOf: "skos:topConceptOf",
+        }
+    )
   return _SKOS_REF_ANNOTATION_PREDICATES
+
 
 # SKOS graph-shaped predicates that produce abstract relationships.
 _SKOS_BROADER = SKOS.broader
@@ -688,15 +705,18 @@ _SKOS_RELATED = SKOS.related
 
 _SKOS_MATCH_PREDICATES: dict[URIRef, str] = {}
 
+
 def _skos_match_preds() -> dict[URIRef, str]:
   if not _SKOS_MATCH_PREDICATES:
-    _SKOS_MATCH_PREDICATES.update({
-        SKOS.exactMatch: "skos_exactMatch",
-        SKOS.closeMatch: "skos_closeMatch",
-        SKOS.broadMatch: "skos_broadMatch",
-        SKOS.narrowMatch: "skos_narrowMatch",
-        SKOS.relatedMatch: "skos_relatedMatch",
-    })
+    _SKOS_MATCH_PREDICATES.update(
+        {
+            SKOS.exactMatch: "skos_exactMatch",
+            SKOS.closeMatch: "skos_closeMatch",
+            SKOS.broadMatch: "skos_broadMatch",
+            SKOS.narrowMatch: "skos_narrowMatch",
+            SKOS.relatedMatch: "skos_relatedMatch",
+        }
+    )
   return _SKOS_MATCH_PREDICATES
 
 
@@ -719,9 +739,7 @@ def _extract_skos_annotations(
   for pred, ann_key in _skos_ref_ann_preds().items():
     values = []
     for obj in g.objects(iri, pred):
-      values.append(
-          _local_name(obj) if isinstance(obj, URIRef) else str(obj)
-      )
+      values.append(_local_name(obj) if isinstance(obj, URIRef) else str(obj))
     if values:
       values.sort()
       annotations[ann_key] = values if len(values) > 1 else values[0]
@@ -776,7 +794,9 @@ def _extract_skos_concepts(
     # present on a pure SKOS concept; skos:* labels go to synonyms or
     # language annotations per the label extractor.
     description, synonyms, lang_anns = _extract_labels_and_description(
-        g, concept, language,
+        g,
+        concept,
+        language,
     )
     drops.skos_labels_discarded_by_language += len(lang_anns)
 
@@ -821,19 +841,24 @@ def _extract_skos_relationships(
   # A sentinel IRI for SKOS-sourced relationships (they have no single
   # OWL IRI; we use the predicate IRI as a reasonable stand-in).
   def _add_rel(
-      rel_name: str, from_name: str, to_name: str, pred_iri: URIRef,
+      rel_name: str,
+      from_name: str,
+      to_name: str,
+      pred_iri: URIRef,
   ) -> None:
     key = (rel_name, from_name, to_name)
     if key in seen:
       return  # Deduplicate (e.g. broader + inverse narrower).
     seen.add(key)
-    skos_rels.append(_ImportedRelationship(
-        name=rel_name,
-        iri=pred_iri,
-        abstract=True,
-        from_entity=from_name,
-        to_entity=to_name,
-    ))
+    skos_rels.append(
+        _ImportedRelationship(
+            name=rel_name,
+            iri=pred_iri,
+            abstract=True,
+            from_entity=from_name,
+            to_entity=to_name,
+        )
+    )
     drops.skos_relationships_imported += 1
 
   # skos:broader — from child to parent.
@@ -868,7 +893,9 @@ def _extract_skos_relationships(
   # assignment (determinism).
   external_matches: dict[tuple[str, str], list[str]] = {}
   for pred, rel_name in _skos_match_preds().items():
-    ann_key = rel_name.replace("skos_", "skos:")  # skos_exactMatch → skos:exactMatch
+    ann_key = rel_name.replace(
+        "skos_", "skos:"
+    )  # skos_exactMatch → skos:exactMatch
     for subj, obj in g.subject_objects(pred):
       if not isinstance(subj, URIRef):
         continue
@@ -891,13 +918,9 @@ def _extract_skos_relationships(
       existing = entity.annotations[ann_key]
       existing_list = existing if isinstance(existing, list) else [existing]
       merged = sorted(set(existing_list) | set(values))
-      entity.annotations[ann_key] = (
-          merged if len(merged) > 1 else merged[0]
-      )
+      entity.annotations[ann_key] = merged if len(merged) > 1 else merged[0]
     else:
-      entity.annotations[ann_key] = (
-          values if len(values) > 1 else values[0]
-      )
+      entity.annotations[ann_key] = values if len(values) > 1 else values[0]
 
   return skos_rels
 
@@ -942,13 +965,9 @@ def _extract_generic_annotations(
         existing = elem.annotations[ann_key]
         existing_list = existing if isinstance(existing, list) else [existing]
         merged = sorted(set(existing_list) | set(values))
-        elem.annotations[ann_key] = (
-            merged if len(merged) > 1 else merged[0]
-        )
+        elem.annotations[ann_key] = merged if len(merged) > 1 else merged[0]
       else:
-        elem.annotations[ann_key] = (
-            values if len(values) > 1 else values[0]
-        )
+        elem.annotations[ann_key] = values if len(values) > 1 else values[0]
       drops.generic_annotations += len(values)
 
 
@@ -1167,23 +1186,34 @@ def _format_drop_summary(
     for kind, count in sorted(drops.dropped_features.items()):
       lines.append(f"  {kind}: {count}")
   if drops.skos_concepts_imported:
-    lines.append(f"SKOS concepts imported as abstract entities: "
-                 f"{drops.skos_concepts_imported}")
+    lines.append(
+        f"SKOS concepts imported as abstract entities: "
+        f"{drops.skos_concepts_imported}"
+    )
   if drops.skos_relationships_imported:
-    lines.append(f"SKOS relationships imported as abstract: "
-                 f"{drops.skos_relationships_imported}")
+    lines.append(
+        f"SKOS relationships imported as abstract: "
+        f"{drops.skos_relationships_imported}"
+    )
   if drops.skos_annotations:
-    lines.append(f"SKOS predicates mapped to annotations: "
-                 f"{drops.skos_annotations}")
+    lines.append(
+        f"SKOS predicates mapped to annotations: " f"{drops.skos_annotations}"
+    )
   if drops.skos_labels_discarded_by_language:
-    lines.append(f"Labels in non-selected languages (preserved as "
-                 f"annotations): {drops.skos_labels_discarded_by_language}")
+    lines.append(
+        f"Labels in non-selected languages (preserved as "
+        f"annotations): {drops.skos_labels_discarded_by_language}"
+    )
   if drops.skos_external_matches:
-    lines.append(f"SKOS match targets outside imported namespaces "
-                 f"(preserved as annotations): {drops.skos_external_matches}")
+    lines.append(
+        f"SKOS match targets outside imported namespaces "
+        f"(preserved as annotations): {drops.skos_external_matches}"
+    )
   if drops.generic_annotations:
-    lines.append(f"Generic literal annotations preserved: "
-                 f"{drops.generic_annotations}")
+    lines.append(
+        f"Generic literal annotations preserved: "
+        f"{drops.generic_annotations}"
+    )
   # Hint for all-abstract ontologies.
   if entities and all(e.abstract for e in entities.values()):
     lines.append(
@@ -1256,7 +1286,11 @@ def import_owl(
   # and OWL relationships so that endpoints referring to SKOS-only
   # concepts resolve to the correct ``skos_<name>`` entity name.
   concept_iri_to_name = _extract_skos_concepts(
-      g, entities, include_namespaces, drops, language,
+      g,
+      entities,
+      include_namespaces,
+      drops,
+      language,
   )
 
   # Build a full IRI→entity-name map (OWL + SKOS) for endpoint resolution.
@@ -1268,16 +1302,28 @@ def import_owl(
   # Stage 3: OWL datatype properties and object properties, with SKOS
   # concepts already visible to endpoint resolution.
   _extract_datatype_properties(
-      g, entities, include_namespaces, drops, iri_to_name=iri_to_name,
+      g,
+      entities,
+      include_namespaces,
+      drops,
+      iri_to_name=iri_to_name,
   )
   owl_relationships = _extract_relationships(
-      g, entities, include_namespaces, drops, language,
+      g,
+      entities,
+      include_namespaces,
+      drops,
+      language,
       iri_to_name=iri_to_name,
   )
 
   # Stage 4: SKOS graph-shaped predicates → abstract relationships.
   skos_rels = _extract_skos_relationships(
-      g, entities, iri_to_name, include_namespaces, drops,
+      g,
+      entities,
+      iri_to_name,
+      include_namespaces,
+      drops,
   )
 
   # Stage 3: Generic literal-annotation pass (covers Dublin Core, etc.).
@@ -1291,9 +1337,9 @@ def import_owl(
   _resolve_keys(entities)
 
   # Merge OWL and SKOS relationships into a single list.
-  all_relationships: list[_ImportedRelationship] = list(
-      owl_relationships.values()
-  ) + skos_rels
+  all_relationships: list[_ImportedRelationship] = (
+      list(owl_relationships.values()) + skos_rels
+  )
 
   # Name collision checks.
   owl_rel_names = set(owl_relationships)

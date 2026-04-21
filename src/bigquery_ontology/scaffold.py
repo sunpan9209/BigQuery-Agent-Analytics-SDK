@@ -516,8 +516,14 @@ def scaffold(
   ddl_text = "\n".join(ddl_parts)
 
   binding_text = _emit_binding_yaml(
-      ontology.ontology, concrete_entities, concrete_rels,
-      entity_tables, rel_tables, dataset, project, naming,
+      ontology.ontology,
+      concrete_entities,
+      concrete_rels,
+      entity_tables,
+      rel_tables,
+      dataset,
+      project,
+      naming,
   )
 
   return ddl_text, binding_text

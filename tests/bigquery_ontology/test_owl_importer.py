@@ -761,7 +761,8 @@ class TestPureSkosImport:
     broader = [r for r in rels if r["name"] == "skos_broader"]
     # InvestmentBanking broader WealthManagement (via narrower inverse)
     inv_wm = [
-        r for r in broader
+        r
+        for r in broader
         if r["from"] == "skos_InvestmentBanking"
         and r["to"] == "skos_WealthManagement"
     ]
@@ -821,7 +822,8 @@ class TestMixedOwlSkos:
     data = yaml.safe_load(yaml_text)
     rels = data["relationships"]
     broader = [
-        r for r in rels
+        r
+        for r in rels
         if r["name"] == "skos_broader"
         and r["from"] == "Account"
         and r["to"] == "skos_FinancialProduct"
@@ -848,7 +850,8 @@ class TestMixedOwlSkos:
     data = yaml.safe_load(yaml_text)
     rels = data["relationships"]
     related = [
-        r for r in rels
+        r
+        for r in rels
         if r["name"] == "skos_related"
         and r["from"] == "Account"
         and r["to"] == "Ledger"
@@ -887,7 +890,9 @@ class TestAbstractOntologyValidation:
 
   def test_abstract_entity_no_keys_passes(self):
     from bigquery_ontology import load_ontology_from_string
-    yaml_str = textwrap.dedent("""\
+
+    yaml_str = textwrap.dedent(
+        """\
       ontology: test_abstract
       entities:
         - name: ConcreteEntity
@@ -896,13 +901,16 @@ class TestAbstractOntologyValidation:
             - {name: id, type: string}
         - name: skos_AbstractEntity
           abstract: true
-    """)
+    """
+    )
     ont = load_ontology_from_string(yaml_str)
     assert ont.entities[1].abstract is True
 
   def test_abstract_rel_duplicate_names_different_endpoints(self):
     from bigquery_ontology import load_ontology_from_string
-    yaml_str = textwrap.dedent("""\
+
+    yaml_str = textwrap.dedent(
+        """\
       ontology: test_abstract_rels
       entities:
         - name: A
@@ -926,13 +934,16 @@ class TestAbstractOntologyValidation:
           abstract: true
           from: A
           to: C
-    """)
+    """
+    )
     ont = load_ontology_from_string(yaml_str)
     assert len(ont.relationships) == 2
 
   def test_abstract_rel_duplicate_name_same_endpoints_fails(self):
     from bigquery_ontology import load_ontology_from_string
-    yaml_str = textwrap.dedent("""\
+
+    yaml_str = textwrap.dedent(
+        """\
       ontology: test_dup
       entities:
         - name: A
@@ -952,7 +963,8 @@ class TestAbstractOntologyValidation:
           abstract: true
           from: A
           to: B
-    """)
+    """
+    )
     with pytest.raises(ValueError, match="Duplicate abstract relationship"):
       load_ontology_from_string(yaml_str)
 
@@ -960,7 +972,9 @@ class TestAbstractOntologyValidation:
     """A concrete relationship cannot have an abstract endpoint —
     there is nothing to bind."""
     from bigquery_ontology import load_ontology_from_string
-    yaml_str = textwrap.dedent("""\
+
+    yaml_str = textwrap.dedent(
+        """\
       ontology: test_concrete_abstract_endpoint
       entities:
         - name: Concrete
@@ -973,14 +987,17 @@ class TestAbstractOntologyValidation:
         - name: pointsAt
           from: Concrete
           to: skos_AbstractTarget
-    """)
+    """
+    )
     with pytest.raises(ValueError, match="abstract endpoint"):
       load_ontology_from_string(yaml_str)
 
   def test_abstract_relationship_abstract_endpoint_allowed(self):
     """An abstract relationship may have abstract endpoints."""
     from bigquery_ontology import load_ontology_from_string
-    yaml_str = textwrap.dedent("""\
+
+    yaml_str = textwrap.dedent(
+        """\
       ontology: test_abstract_abstract_endpoint
       entities:
         - name: Concrete
@@ -996,14 +1013,17 @@ class TestAbstractOntologyValidation:
           abstract: true
           from: skos_AbstractSource
           to: skos_AbstractTarget
-    """)
+    """
+    )
     ont = load_ontology_from_string(yaml_str)
     assert len(ont.relationships) == 1
 
   def test_abstract_relationship_endpoint_must_exist(self):
     """Endpoint existence is still enforced on abstract relationships."""
     from bigquery_ontology import load_ontology_from_string
-    yaml_str = textwrap.dedent("""\
+
+    yaml_str = textwrap.dedent(
+        """\
       ontology: test_missing_endpoint
       entities:
         - name: A
@@ -1015,13 +1035,16 @@ class TestAbstractOntologyValidation:
           abstract: true
           from: A
           to: DoesNotExist
-    """)
+    """
+    )
     with pytest.raises(ValueError, match="DoesNotExist"):
       load_ontology_from_string(yaml_str)
 
   def test_concrete_abstract_name_collision_fails(self):
     from bigquery_ontology import load_ontology_from_string
-    yaml_str = textwrap.dedent("""\
+
+    yaml_str = textwrap.dedent(
+        """\
       ontology: test_collision
       entities:
         - name: A
@@ -1040,7 +1063,8 @@ class TestAbstractOntologyValidation:
           abstract: true
           from: A
           to: B
-    """)
+    """
+    )
     with pytest.raises(ValueError, match="concrete and an abstract"):
       load_ontology_from_string(yaml_str)
 
@@ -1051,7 +1075,10 @@ class TestAbstractBindingRejection:
   def test_binding_abstract_entity_fails(self):
     from bigquery_ontology import load_ontology_from_string
     from bigquery_ontology.binding_loader import load_binding_from_string
-    ont = load_ontology_from_string(textwrap.dedent("""\
+
+    ont = load_ontology_from_string(
+        textwrap.dedent(
+            """\
       ontology: test
       entities:
         - name: Concrete
@@ -1060,8 +1087,11 @@ class TestAbstractBindingRejection:
             - {name: id, type: string}
         - name: Abstract
           abstract: true
-    """))
-    binding_yaml = textwrap.dedent("""\
+    """
+        )
+    )
+    binding_yaml = textwrap.dedent(
+        """\
       binding: test_bind
       ontology: test
       target:
@@ -1073,14 +1103,18 @@ class TestAbstractBindingRejection:
           source: tbl
           properties:
             - {name: id, column: id}
-    """)
+    """
+    )
     with pytest.raises(ValueError, match="abstract entity"):
       load_binding_from_string(binding_yaml, ontology=ont)
 
   def test_binding_abstract_relationship_fails(self):
     from bigquery_ontology import load_ontology_from_string
     from bigquery_ontology.binding_loader import load_binding_from_string
-    ont = load_ontology_from_string(textwrap.dedent("""\
+
+    ont = load_ontology_from_string(
+        textwrap.dedent(
+            """\
       ontology: test
       entities:
         - name: A
@@ -1096,8 +1130,11 @@ class TestAbstractBindingRejection:
           abstract: true
           from: A
           to: B
-    """))
-    binding_yaml = textwrap.dedent("""\
+    """
+        )
+    )
+    binding_yaml = textwrap.dedent(
+        """\
       binding: test_bind
       ontology: test
       target:
@@ -1118,7 +1155,8 @@ class TestAbstractBindingRejection:
           source: tbl_rel
           from_columns: [a_id]
           to_columns: [b_id]
-    """)
+    """
+    )
     with pytest.raises(ValueError, match="abstract relationship"):
       load_binding_from_string(binding_yaml, ontology=ont)
 
@@ -1129,7 +1167,10 @@ class TestAbstractScaffold:
   def test_scaffold_skips_abstract(self):
     from bigquery_ontology import load_ontology_from_string
     from bigquery_ontology.scaffold import scaffold
-    ont = load_ontology_from_string(textwrap.dedent("""\
+
+    ont = load_ontology_from_string(
+        textwrap.dedent(
+            """\
       ontology: test
       entities:
         - name: Concrete
@@ -1143,7 +1184,9 @@ class TestAbstractScaffold:
           abstract: true
           from: Concrete
           to: skos_Abstract
-    """))
+    """
+        )
+    )
     ddl, binding_yaml = scaffold(ont, dataset="ds", project="proj")
     assert "concrete" in ddl
     assert "skos_abstract" not in ddl
@@ -1158,7 +1201,9 @@ class TestOwlRefToSkosConcept:
 
   def test_owl_objectproperty_range_on_skos_concept(self, tmp_path):
     ttl = tmp_path / "ref.ttl"
-    ttl.write_text(textwrap.dedent("""\
+    ttl.write_text(
+        textwrap.dedent(
+            """\
       @prefix : <http://example.com/test#> .
       @prefix owl: <http://www.w3.org/2002/07/owl#> .
       @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
@@ -1173,7 +1218,9 @@ class TestOwlRefToSkosConcept:
       :account_id a owl:DatatypeProperty ;
           rdfs:domain :Account ;
           rdfs:range xsd:string .
-    """))
+    """
+        )
+    )
     yaml_text, _ = import_owl(
         [ttl],
         include_namespaces=["http://example.com/test#"],
@@ -1181,11 +1228,16 @@ class TestOwlRefToSkosConcept:
     # When added, an OWL ObjectProperty pointing at :Category should
     # emit ``to: skos_Category``, not ``to: Category``.
     # Add a probe ObjectProperty and reparse.
-    ttl.write_text(ttl.read_text() + textwrap.dedent("""
+    ttl.write_text(
+        ttl.read_text()
+        + textwrap.dedent(
+            """
       :belongsTo a owl:ObjectProperty ;
           rdfs:domain :Account ;
           rdfs:range :Category .
-    """))
+    """
+        )
+    )
     yaml_text, _ = import_owl(
         [ttl],
         include_namespaces=["http://example.com/test#"],
@@ -1201,7 +1253,9 @@ class TestAbstractKeyShapeValidation:
 
   def test_abstract_entity_key_column_must_exist(self):
     from bigquery_ontology import load_ontology_from_string
-    yaml_str = textwrap.dedent("""\
+
+    yaml_str = textwrap.dedent(
+        """\
       ontology: test
       entities:
         - name: Real
@@ -1212,13 +1266,16 @@ class TestAbstractKeyShapeValidation:
           abstract: true
           keys:
             primary: [nonexistent]
-    """)
+    """
+    )
     with pytest.raises(ValueError, match="nonexistent"):
       load_ontology_from_string(yaml_str)
 
   def test_abstract_entity_forbids_additional_keys(self):
     from bigquery_ontology import load_ontology_from_string
-    yaml_str = textwrap.dedent("""\
+
+    yaml_str = textwrap.dedent(
+        """\
       ontology: test
       entities:
         - name: Real
@@ -1232,13 +1289,16 @@ class TestAbstractKeyShapeValidation:
           keys:
             primary: [x]
             additional: [x]
-    """)
+    """
+    )
     with pytest.raises(ValueError, match="additional is not allowed"):
       load_ontology_from_string(yaml_str)
 
   def test_abstract_relationship_cannot_use_extends(self):
     from bigquery_ontology import load_ontology_from_string
-    yaml_str = textwrap.dedent("""\
+
+    yaml_str = textwrap.dedent(
+        """\
       ontology: test
       entities:
         - name: A
@@ -1258,7 +1318,8 @@ class TestAbstractKeyShapeValidation:
           extends: parentRel
           from: A
           to: B
-    """)
+    """
+    )
     with pytest.raises(ValueError, match="abstract.*must not use 'extends'"):
       load_ontology_from_string(yaml_str)
 
@@ -1268,6 +1329,7 @@ class TestRoundTrip:
 
   def test_pure_skos_roundtrip(self):
     from bigquery_ontology import load_ontology_from_string
+
     yaml_text, _ = import_owl(
         [_SKOS_TTL],
         include_namespaces=["http://example.com/taxonomy#"],
@@ -1278,6 +1340,7 @@ class TestRoundTrip:
 
   def test_mixed_owl_skos_roundtrip(self):
     from bigquery_ontology import load_ontology_from_string
+
     yaml_text, _ = import_owl(
         [_MIXED_TTL],
         include_namespaces=["http://example.com/finance#"],
