@@ -181,12 +181,15 @@ One thing worth knowing: every query the SDK runs is labeled with the SDK versio
 <!-- Gist embed candidate: INFORMATION_SCHEMA cost-per-call-site query -->
 
 ```sql
+-- INFORMATION_SCHEMA region must match your dataset's location.
+-- This example uses us-central1 to match the setup in section 3;
+-- swap in region-us, region-europe-west4, etc. as appropriate.
 SELECT
   labels.value AS sdk_call_site,
   COUNT(*) AS runs,
   SUM(total_bytes_processed) / POW(1024, 3) AS gb_processed,
   AVG(total_slot_ms) AS avg_slot_ms
-FROM `region-us`.INFORMATION_SCHEMA.JOBS
+FROM `region-us-central1`.INFORMATION_SCHEMA.JOBS
 LEFT JOIN UNNEST(labels) AS labels
 WHERE labels.key = 'bq_agent_sdk_call'
   AND creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 DAY)
