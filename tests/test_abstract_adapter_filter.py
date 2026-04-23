@@ -47,7 +47,6 @@ from bigquery_ontology import PropertyBinding
 from bigquery_ontology import PropertyType
 from bigquery_ontology import Relationship
 
-
 # ------------------------------------------------------------------ #
 # Fixtures                                                            #
 # ------------------------------------------------------------------ #

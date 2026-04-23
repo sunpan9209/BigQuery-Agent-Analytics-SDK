@@ -240,9 +240,7 @@ def graph_spec_from_ontology_binding(
   # Concrete-only filter: abstract upstream elements never enter the
   # name-indexed maps. See the docstring above for the rationale.
   concrete_entities = [e for e in ontology.entities if not e.abstract]
-  concrete_relationships = [
-      r for r in ontology.relationships if not r.abstract
-  ]
+  concrete_relationships = [r for r in ontology.relationships if not r.abstract]
 
   if not concrete_entities:
     abstract_count = len(ontology.entities)

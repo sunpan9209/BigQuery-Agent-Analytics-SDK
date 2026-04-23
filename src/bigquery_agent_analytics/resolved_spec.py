@@ -251,12 +251,8 @@ def resolve(
   # This also prevents the ``(name, from, to)``-unique abstract
   # relationships relaxed in PR #62 from collapsing under
   # ``{r.name: r}`` last-write-wins.
-  concrete_entity_names = {
-      e.name for e in ontology.entities if not e.abstract
-  }
-  concrete_relationships = [
-      r for r in ontology.relationships if not r.abstract
-  ]
+  concrete_entity_names = {e.name for e in ontology.entities if not e.abstract}
+  concrete_relationships = [r for r in ontology.relationships if not r.abstract]
 
   if not concrete_entity_names:
     abstract_count = len(ontology.entities)
