@@ -55,6 +55,9 @@ import uuid
 
 from google.cloud import bigquery
 
+from ._ontology_routing import build_name_to_column
+from ._ontology_routing import normalize_property_value
+from ._ontology_routing import parse_key_segment
 from ._telemetry import LabeledBigQueryClient
 from ._telemetry import make_bq_client
 from ._telemetry import with_sdk_labels
@@ -262,40 +265,50 @@ def _route_node(
 ) -> dict:
   """Convert an ``ExtractedNode`` to a row dict for ``insert_rows_json``.
 
-  Only properties declared in the entity spec are included.  Extra
+  Only properties declared in the entity spec are included. Extra
   properties emitted by AI.GENERATE (e.g. hallucinated fields or
   fields belonging to a different entity type) are silently dropped
   to prevent ``insert_rows_json`` failures on non-schema columns.
+
+  Property-name resolution accepts both ``ResolvedProperty.logical_name``
+  (the ontology-level name an LLM extractor naturally produces) and
+  ``ResolvedProperty.column`` (the physical column name from the
+  binding). This matches the contract of
+  ``graph_validation.validate_extracted_graph(...)`` (issue #76):
+  the validator says "logical-name extraction is OK," and the
+  materializer must honor the same contract — otherwise a
+  validator-clean extraction silently drops renamed-binding
+  properties at INSERT time.
   """
-  schema_props = {p.column for p in entity_spec.properties}
+  # Build {accepted_name: physical_column} so we route renamed
+  # logical names to the actual BQ column. Uses the shared two-pass
+  # helper so collision precedence (logical name wins) matches the
+  # validator's _build_property_lookup exactly.
+  name_to_col = build_name_to_column(entity_spec.properties)
+  # Look up sdk_type per physical column for normalization. The
+  # validator legitimately accepts Python bytes / date / datetime
+  # for the corresponding SDK types, but insert_rows_json /
+  # load_table_from_json need JSON-compatible values; normalize
+  # before writing.
+  sdk_type_by_col = {p.column: p.sdk_type for p in entity_spec.properties}
+
   row: dict = {}
   for prop in node.properties:
-    if prop.name in schema_props:
-      row[prop.name] = prop.value
+    physical = name_to_col.get(prop.name)
+    if physical is not None:
+      row[physical] = normalize_property_value(
+          prop.value, sdk_type_by_col.get(physical, "string")
+      )
   row["session_id"] = session_id
   row["extracted_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
   return row
 
 
-def _parse_key_segment(node_id: str) -> dict[str, str]:
-  """Parse the key segment from a node ID.
-
-  Node IDs look like ``{session_id}:{entity_name}:{k1=v1,k2=v2}``.
-  Returns a dict of key-value pairs from the last segment, or empty
-  dict if the format is unexpected (e.g. index-based fallback IDs).
-  """
-  parts = node_id.split(":")
-  if len(parts) < 3:
-    return {}
-  key_segment = parts[-1]
-  if "=" not in key_segment:
-    return {}
-  result = {}
-  for pair in key_segment.split(","):
-    if "=" in pair:
-      k, v = pair.split("=", 1)
-      result[k] = v
-  return result
+# Backward-compat re-export. Older callers (and tests) import
+# ``_parse_key_segment`` from this module directly; the canonical
+# implementation now lives in ``_ontology_routing`` so the validator
+# and materializer share one source of truth.
+_parse_key_segment = parse_key_segment
 
 
 def _route_edge(
@@ -315,7 +328,7 @@ def _route_edge(
   # Map from-entity keys.  from_columns are a subset of the source
   # entity's primary keys, so the column names match the key names
   # in the parsed node ID segment.
-  from_keys = _parse_key_segment(edge.from_node_id)
+  from_keys = parse_key_segment(edge.from_node_id)
   if rel.from_columns:
     for col in rel.from_columns:
       row[col] = from_keys.get(col, "")
@@ -323,7 +336,7 @@ def _route_edge(
     row.update(from_keys)
 
   # Map to-entity keys (same logic).
-  to_keys = _parse_key_segment(edge.to_node_id)
+  to_keys = parse_key_segment(edge.to_node_id)
   if rel.to_columns:
     for col in rel.to_columns:
       row[col] = to_keys.get(col, "")
@@ -331,11 +344,18 @@ def _route_edge(
     row.update(to_keys)
 
   # Edge properties — only include properties declared in the spec.
-  # Extra AI-emitted fields are dropped to prevent insert failures.
-  schema_props = {p.column for p in rel.properties}
+  # Same shared helper as ``_route_node`` so collision precedence
+  # (logical name wins) matches the validator exactly. Same
+  # normalization step too so bytes / date / datetime values land
+  # as JSON-serializable forms.
+  edge_name_to_col = build_name_to_column(rel.properties)
+  edge_sdk_type_by_col = {p.column: p.sdk_type for p in rel.properties}
   for prop in edge.properties:
-    if prop.name in schema_props:
-      row[prop.name] = prop.value
+    physical = edge_name_to_col.get(prop.name)
+    if physical is not None:
+      row[physical] = normalize_property_value(
+          prop.value, edge_sdk_type_by_col.get(physical, "string")
+      )
 
   # Determine session_id for delete-scoped ownership.
   # For lineage edges with to_session_column, session_id = to_session value
