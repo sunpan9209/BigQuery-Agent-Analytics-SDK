@@ -116,22 +116,25 @@ traces = client.list_traces(
 
 ### Pre-Built Evaluators
 
-The SDK ships with six ready-to-use evaluators:
+The SDK ships with seven ready-to-use evaluators:
 
 ```python
 from bigquery_agent_analytics import CodeEvaluator
 
-# Latency: score degrades linearly as avg latency approaches threshold
+# Latency: fails when average latency exceeds the budget
 evaluator = CodeEvaluator.latency(threshold_ms=5000)
 
-# Turn count: penalizes sessions with too many back-and-forth turns
+# Turn count: fails when sessions use too many back-and-forth turns
 evaluator = CodeEvaluator.turn_count(max_turns=10)
 
-# Error rate: penalizes high tool error rates
+# Error rate: fails on high tool error rates
 evaluator = CodeEvaluator.error_rate(max_error_rate=0.1)
 
 # Token efficiency: checks total token usage stays within budget
 evaluator = CodeEvaluator.token_efficiency(max_tokens=50000)
+
+# Context cache hit rate: checks repeated prompt-prefix reuse
+evaluator = CodeEvaluator.context_cache_hit_rate(min_hit_rate=0.5)
 
 # Cost per session: checks estimated USD cost stays under budget
 evaluator = CodeEvaluator.cost_per_session(
@@ -140,6 +143,18 @@ evaluator = CodeEvaluator.cost_per_session(
     output_cost_per_1k=0.00125,
 )
 ```
+
+`context_cache_hit_rate()` requires source telemetry that includes
+Gemini `usage_metadata.cached_content_token_count`. Older plugin data
+may not contain that field. When cache telemetry is absent, the
+evaluator reports `cache_state="no_cache_telemetry"` and passes by
+default instead of treating the session as a 0% cache hit. Set
+`fail_on_missing_telemetry=True` to make missing cache telemetry fail.
+
+The metric identifies sessions with low context-cache efficiency. It
+does not identify the exact prompt segment or template change that
+broke prefix reuse unless the source telemetry includes prompt hashes,
+template IDs, or segment-level metadata.
 
 ### Custom Metrics
 
@@ -1757,7 +1772,8 @@ bq-agent-sdk evaluate --project-id=P --dataset-id=D \
 ```
 
 Available evaluators: `latency`, `error_rate`, `turn_count`,
-`token_efficiency`, `ttft`, `cost`, `llm-judge`.
+`token_efficiency`, `context_cache_hit_rate`, `ttft`, `cost`,
+`llm-judge`.
 
 LLM judge criteria: `correctness`, `hallucination`, `sentiment`.
 

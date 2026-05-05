@@ -421,8 +421,15 @@ value strictly exceeds the budget.
 | `turn_count(max_turns)` | `turn_count` | `observed <= max_turns` |
 | `error_rate(max_error_rate)` | `tool_errors / tool_calls` (0 when no calls) | `observed <= max_error_rate` |
 | `token_efficiency(max_tokens)` | `total_tokens` | `observed <= max_tokens` |
+| `context_cache_hit_rate(min_hit_rate)` | `cached_tokens / input_tokens` when cache telemetry exists | `observed >= min_hit_rate` |
 | `ttft(threshold_ms)` | `avg_ttft_ms` | `observed <= threshold_ms` |
 | `cost_per_session(max_cost_usd, ...)` | `(input_tokens/1K)*input_rate + (output_tokens/1K)*output_rate` | `observed <= max_cost_usd` |
+
+`context_cache_hit_rate()` treats missing cache telemetry as unknown,
+not as a cache miss. Older plugin rows without
+`usage_metadata.cached_content_token_count` report
+`cache_state="no_cache_telemetry"` and pass by default unless
+`fail_on_missing_telemetry=True` is set.
 
 > **Prior to v0.2.2** these factories used a normalized score
 > `1.0 - min(observed / budget, 1.0)` with a `0.5` pass cutoff, which

@@ -143,6 +143,9 @@ def build_evaluator(params):
       "token_efficiency": lambda t: CodeEvaluator.token_efficiency(
           max_tokens=int(t),
       ),
+      "context_cache_hit_rate": lambda t: (
+          CodeEvaluator.context_cache_hit_rate(min_hit_rate=t)
+      ),
       "ttft": lambda t: CodeEvaluator.ttft(threshold_ms=t),
       "cost": lambda t: CodeEvaluator.cost_per_session(
           max_cost_usd=t,
@@ -153,6 +156,7 @@ def build_evaluator(params):
       "error_rate": CodeEvaluator.error_rate,
       "turn_count": CodeEvaluator.turn_count,
       "token_efficiency": CodeEvaluator.token_efficiency,
+      "context_cache_hit_rate": CodeEvaluator.context_cache_hit_rate,
       "ttft": CodeEvaluator.ttft,
       "cost": CodeEvaluator.cost_per_session,
   }

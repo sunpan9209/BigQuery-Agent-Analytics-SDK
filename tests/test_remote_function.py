@@ -280,6 +280,7 @@ class TestEvaluate:
           "error_rate",
           "turn_count",
           "token_efficiency",
+          "context_cache_hit_rate",
           "ttft",
           "cost",
       ],

@@ -205,7 +205,7 @@ All commands share:
 ```
 bq-agent-sdk evaluate [OPTIONS]
   --evaluator TEXT      latency|error_rate|turn_count|token_efficiency|
-                        ttft|cost|llm-judge
+                        context_cache_hit_rate|ttft|cost|llm-judge
   --threshold FLOAT
   --criterion TEXT      correctness|hallucination|sentiment|custom
   --custom-prompt TEXT
@@ -223,6 +223,7 @@ EVALUATOR_FACTORIES = {
     "error_rate": lambda t: CodeEvaluator.error_rate(max_error_rate=t),
     "turn_count": lambda t: CodeEvaluator.turn_count(max_turns=int(t)),
     "token_efficiency": lambda t: CodeEvaluator.token_efficiency(max_tokens=int(t)),
+    "context_cache_hit_rate": lambda t: CodeEvaluator.context_cache_hit_rate(min_hit_rate=t),
     "ttft": lambda t: CodeEvaluator.ttft(threshold_ms=t),
     "cost": lambda t: CodeEvaluator.cost_per_session(max_cost_usd=t),
     "llm-judge": None,  # special handling
@@ -394,6 +395,9 @@ def _build_evaluator(params):
         "turn_count": lambda t: CodeEvaluator.turn_count(max_turns=int(t)),
         "token_efficiency": lambda t: CodeEvaluator.token_efficiency(
             max_tokens=int(t)
+        ),
+        "context_cache_hit_rate": lambda t: (
+            CodeEvaluator.context_cache_hit_rate(min_hit_rate=t)
         ),
         "ttft": lambda t: CodeEvaluator.ttft(threshold_ms=t),
         "cost": lambda t: CodeEvaluator.cost_per_session(max_cost_usd=t),
@@ -601,6 +605,7 @@ Complete mapping from interface operations to current SDK code:
 | `error_rate` | `CodeEvaluator.error_rate(max_error_rate)` | `evaluators.py` |
 | `turn_count` | `CodeEvaluator.turn_count(max_turns)` | `evaluators.py` |
 | `token_efficiency` | `CodeEvaluator.token_efficiency(max_tokens)` | `evaluators.py` |
+| `context_cache_hit_rate` | `CodeEvaluator.context_cache_hit_rate(min_hit_rate)` | `evaluators.py` |
 | `ttft` | `CodeEvaluator.ttft(threshold_ms)` | `evaluators.py` |
 | `cost` | `CodeEvaluator.cost_per_session(max_cost_usd)` | `evaluators.py` |
 | `llm-judge` | `LLMAsJudge.correctness/hallucination/sentiment(threshold)` | `evaluators.py` |
