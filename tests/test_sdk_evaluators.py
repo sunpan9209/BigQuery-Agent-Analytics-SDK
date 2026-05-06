@@ -718,6 +718,29 @@ class TestContextCacheHitRatePrebuilt:
           warm_rate=0.1,
       )
 
+  def test_invalid_min_hit_rate_negative_raises(self):
+    with pytest.raises(ValueError, match="min_hit_rate"):
+      CodeEvaluator.context_cache_hit_rate(min_hit_rate=-0.1)
+
+  def test_invalid_min_hit_rate_above_one_raises(self):
+    with pytest.raises(ValueError, match="min_hit_rate"):
+      CodeEvaluator.context_cache_hit_rate(min_hit_rate=1.1)
+
+  def test_string_min_hit_rate_is_coerced(self):
+    evaluator = CodeEvaluator.context_cache_hit_rate(min_hit_rate="0.5")
+    score = evaluator.evaluate_session(
+        {
+            "session_id": "s1",
+            "input_tokens": 1000,
+            "cached_tokens": 950,
+            "cache_telemetry_events": 1,
+        }
+    )
+    assert score.passed is True
+    detail = score.details["metric_context_cache_hit_rate"]
+    assert detail["budget"] == pytest.approx(0.5)
+    assert detail["threshold"] == pytest.approx(0.5)
+
 
 class TestCostPerSessionPrebuilt:
   """Tests for CodeEvaluator.cost_per_session() preset."""

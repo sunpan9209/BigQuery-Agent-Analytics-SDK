@@ -547,6 +547,17 @@ class CodeEvaluator:
     Returns:
         CodeEvaluator configured for context cache efficiency.
     """
+    try:
+      min_hit_rate = float(min_hit_rate)
+    except (TypeError, ValueError) as exc:
+      raise ValueError(
+          f"min_hit_rate must be a number, got {min_hit_rate!r}"
+      ) from exc
+    if not 0.0 <= min_hit_rate <= 1.0:
+      raise ValueError(
+          "min_hit_rate must satisfy 0 <= min_hit_rate <= 1, "
+          f"got {min_hit_rate}"
+      )
     if not 0.0 <= cold_start_rate < warm_rate <= 1.0:
       raise ValueError(
           "cold_start_rate and warm_rate must satisfy "

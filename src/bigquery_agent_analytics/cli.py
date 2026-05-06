@@ -230,10 +230,6 @@ _CODE_EVALUATORS = {
         lambda t: CodeEvaluator.token_efficiency(max_tokens=int(t)),
         lambda: CodeEvaluator.token_efficiency(),
     ),
-    "context_cache_hit_rate": (
-        lambda t: CodeEvaluator.context_cache_hit_rate(min_hit_rate=t),
-        lambda: CodeEvaluator.context_cache_hit_rate(),
-    ),
     "ttft": (
         lambda t: CodeEvaluator.ttft(threshold_ms=t),
         lambda: CodeEvaluator.ttft(),

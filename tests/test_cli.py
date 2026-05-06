@@ -889,6 +889,7 @@ class TestAllEvaluators:
     client = MagicMock()
     client.evaluate.return_value = _mock_report(10, 10)
     mock_build.return_value = client
+    threshold = "0.5" if name == "context_cache_hit_rate" else "100"
 
     result = runner.invoke(
         app,
@@ -897,7 +898,7 @@ class TestAllEvaluators:
             "--project-id=proj",
             "--dataset-id=ds",
             f"--evaluator={name}",
-            "--threshold=100",
+            f"--threshold={threshold}",
         ],
     )
     assert result.exit_code == 0

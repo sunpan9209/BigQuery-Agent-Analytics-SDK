@@ -155,9 +155,6 @@ def build_evaluator(params):
       "token_efficiency": lambda t: CodeEvaluator.token_efficiency(
           max_tokens=int(t),
       ),
-      "context_cache_hit_rate": lambda t: (
-          CodeEvaluator.context_cache_hit_rate(min_hit_rate=t)
-      ),
       "ttft": lambda t: CodeEvaluator.ttft(threshold_ms=t),
       "cost": lambda t: CodeEvaluator.cost_per_session(
           max_cost_usd=t,
@@ -168,19 +165,18 @@ def build_evaluator(params):
       "error_rate": CodeEvaluator.error_rate,
       "turn_count": CodeEvaluator.turn_count,
       "token_efficiency": CodeEvaluator.token_efficiency,
-      "context_cache_hit_rate": CodeEvaluator.context_cache_hit_rate,
       "ttft": CodeEvaluator.ttft,
       "cost": CodeEvaluator.cost_per_session,
   }
-
-  if metric not in factories_with_t:
-    raise ValueError(f"Unknown metric: {metric!r}")
 
   if metric == "context_cache_hit_rate":
     kwargs = {"fail_on_missing_telemetry": fail_on_missing_telemetry}
     if threshold is not None:
       kwargs["min_hit_rate"] = threshold
     return CodeEvaluator.context_cache_hit_rate(**kwargs)
+
+  if metric not in factories_with_t:
+    raise ValueError(f"Unknown metric: {metric!r}")
 
   if threshold is not None:
     return factories_with_t[metric](threshold)

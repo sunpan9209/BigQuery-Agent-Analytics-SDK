@@ -224,11 +224,12 @@ EVALUATOR_FACTORIES = {
     "error_rate": lambda t: CodeEvaluator.error_rate(max_error_rate=t),
     "turn_count": lambda t: CodeEvaluator.turn_count(max_turns=int(t)),
     "token_efficiency": lambda t: CodeEvaluator.token_efficiency(max_tokens=int(t)),
-    "context_cache_hit_rate": lambda t: CodeEvaluator.context_cache_hit_rate(min_hit_rate=t),
     "ttft": lambda t: CodeEvaluator.ttft(threshold_ms=t),
     "cost": lambda t: CodeEvaluator.cost_per_session(max_cost_usd=t),
     "llm-judge": None,  # special handling
 }
+# context_cache_hit_rate is special-cased so callers can pass
+# fail_on_missing_telemetry in addition to threshold/min_hit_rate.
 ```
 
 ### 2.5 Exit Codes
@@ -386,12 +387,20 @@ def _dispatch(client, operation, params):
         raise ValueError(f"Unknown operation: {operation}")
 
 
+def _bool_param(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)
+
+
 def _build_evaluator(params):
     """Build CodeEvaluator from params dict."""
     metric = params.get("metric", "latency")
     threshold = params.get("threshold")
-    fail_on_missing_telemetry = params.get(
-        "fail_on_missing_telemetry", False
+    fail_on_missing_telemetry = _bool_param(
+        params.get("fail_on_missing_telemetry", False)
     )
     factories = {
         "latency": lambda t: CodeEvaluator.latency(threshold_ms=t),
@@ -399,9 +408,6 @@ def _build_evaluator(params):
         "turn_count": lambda t: CodeEvaluator.turn_count(max_turns=int(t)),
         "token_efficiency": lambda t: CodeEvaluator.token_efficiency(
             max_tokens=int(t)
-        ),
-        "context_cache_hit_rate": lambda t: (
-            CodeEvaluator.context_cache_hit_rate(min_hit_rate=t)
         ),
         "ttft": lambda t: CodeEvaluator.ttft(threshold_ms=t),
         "cost": lambda t: CodeEvaluator.cost_per_session(max_cost_usd=t),
@@ -411,17 +417,16 @@ def _build_evaluator(params):
         "error_rate": CodeEvaluator.error_rate,
         "turn_count": CodeEvaluator.turn_count,
         "token_efficiency": CodeEvaluator.token_efficiency,
-        "context_cache_hit_rate": CodeEvaluator.context_cache_hit_rate,
         "ttft": CodeEvaluator.ttft,
         "cost": CodeEvaluator.cost_per_session,
     }
-    if metric not in factories:
-        raise ValueError(f"Unknown metric: {metric}")
     if metric == "context_cache_hit_rate":
         kwargs = {"fail_on_missing_telemetry": fail_on_missing_telemetry}
         if threshold is not None:
             kwargs["min_hit_rate"] = threshold
         return CodeEvaluator.context_cache_hit_rate(**kwargs)
+    if metric not in factories:
+        raise ValueError(f"Unknown metric: {metric}")
     if threshold is not None:
         return factories[metric](threshold)
     return factories_default[metric]()
